@@ -509,7 +509,7 @@ PSafePtr<OpalConnection> ModemEndPoint::MakeConnection(
     }
   }
 
-  PWaitAndSignal wait(inUseFlag);
+  PWaitAndSignal wait(PMutex inUseFlag);
   PString token;
 
   for (int i = 0 ; i < 10000 ; i++) {
@@ -573,7 +573,7 @@ ModemConnection::ModemConnection(
   , phaseWasTimeout(false)
 {
   remotePartyNumber = GetPartyName(remoteParty);
-  remotePartyAddress = remoteParty;
+  PString remotePartyAddress = remoteParty;
 
   myPTRACE(4, "ModemConnection::ModemConnection " << *this);
 

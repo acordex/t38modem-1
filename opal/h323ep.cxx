@@ -611,10 +611,10 @@ PBoolean MyH323Connection::OnOpenMediaStream(OpalMediaStream & stream)
 {
   PTRACE(4, "MyH323Connection::OnOpenMediaStream: " << stream);
 
-  RTP_Session *session = GetSession(stream.GetSessionID());
+  //OpalRTP_Session *session = GetSession(stream.GetSessionID());
 
-  if (session)
-    RTP_Session::EncodingLock(*session)->ApplyStringOptions(GetStringOptions());
+  //if (session)
+  //  OpalRTP_Session::EncodingLock(*session)->ApplyStringOptions(GetStringOptions());
 
   return H323Connection::OnOpenMediaStream(stream);
 }
