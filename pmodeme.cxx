@@ -402,8 +402,6 @@
 #include "version.h"
 
 ///////////////////////////////////////////////////////////////
-#include "g711.c"
-///////////////////////////////////////////////////////////////
 static const char Manufacturer[] = "Frolov,Holtschneider,Davidson";
 static const char Model[] = "T38FAX";
 #define _TOSTR(s) #s
@@ -544,10 +542,6 @@ class Profile
 
       if (modemClass == "1") {
         modemClassId = EngineBase::mcFax;
-      }
-      else
-      if (modemClass == "8") {
-        modemClassId = EngineBase::mcAudio;
       }
       else {
         modemClassId = EngineBase::mcUndefined;
@@ -738,10 +732,6 @@ static ostream & operator<<(ostream & out, State state)
 ///////////////////////////////////////////////////////////////
 enum SubStateConnectHandle {
   chConnected,
-  chWaitAudioEngine,
-  chAudioEngineAttached,
-  chWaitPlayTone,
-  chTonePlayed,
   chConnectionEstablishDelay,
   chConnectionEstablished,
 };
@@ -751,10 +741,6 @@ static ostream & operator<<(ostream & out, SubStateConnectHandle subState)
 {
   switch (subState) {
     case chConnected:                   return out << "chConnected";
-    case chWaitAudioEngine:             return out << "chWaitAudioEngine";
-    case chAudioEngineAttached:         return out << "chAudioEngineAttached";
-    case chWaitPlayTone:                return out << "chWaitPlayTone";
-    case chTonePlayed:                  return out << "chTonePlayed";
     case chConnectionEstablishDelay:    return out << "chConnectionEstablishDelay";
     case chConnectionEstablished:       return out << "chConnectionEstablished";
   }
@@ -783,7 +769,6 @@ static ostream & operator<<(ostream & out, const StateAndSubState &stateAndSubSt
 #endif
 ///////////////////////////////////////////////////////////////
 enum ModemClassEngine {
-  mceAudio,
   mceT38,
   mceNumberOfItems,
 };
@@ -792,7 +777,6 @@ enum ModemClassEngine {
 static ostream & operator<<(ostream & out, ModemClassEngine mce)
 {
   switch (mce) {
-    case mceAudio:           return out << "mceAudio";
     case mceT38:             return out << "mceT38";
     default:                 break;
   }
@@ -838,7 +822,6 @@ class ModemEngineBody : public PObject
   protected:
     PBoolean Echo() const { return P.Echo(); }
     PBoolean HandleClass1Cmd(const char **ppCmd, PString &resp, PBoolean &ok, PBoolean &crlf);
-    PBoolean HandleClass8Cmd(const char **ppCmd, PString &resp, PBoolean &ok, PBoolean &crlf);
     PBoolean Answer();
     void HandleCmd(PString &resp);
     void HandleCmdRest(PString &resp);
@@ -855,13 +838,6 @@ class ModemEngineBody : public PObject
 
     PBoolean SetBitRevDleData() {
       switch (P.ModemClassId()) {
-      case EngineBase::mcAudio:
-        dleData.BitRev(
-#ifdef ALAW_132_BIT_REVERSE
-          P.Vcml() == 132 ? TRUE :
-#endif
-          FALSE);
-        break;
       case EngineBase::mcFax:
         dleData.BitRev(TRUE);
         break;
@@ -1032,9 +1008,6 @@ class ModemEngineBody : public PObject
       }
 
       switch (P.ModemClassId()) {
-        case EngineBase::mcAudio:
-          currentClassEngine = activeEngines[mceAudio];
-          break;
         case EngineBase::mcFax:
           currentClassEngine = activeEngines[mceT38];
           break;
@@ -1134,7 +1107,7 @@ EngineBase *ModemEngine::NewPtrUserInputEngine() const
   if (!body)
     return NULL;
 
-  return body->NewPtrEngine(mceAudio);
+  return body->NewPtrEngine(mceT38);
 }
 
 PBoolean ModemEngine::Request(PStringToString &request) const
@@ -1303,7 +1276,6 @@ void ModemEngineBody::OnHook()
     state = stCommand;
     subState = 0;
     _DetachEngine(mceT38);
-    _DetachEngine(mceAudio);
     TRACE_STATE(4, "ModemEngineBody::OnHook:");
   }
 
@@ -1331,16 +1303,10 @@ void ModemEngineBody::_ClearCall()
     if (off_hook) {
       timerBusy.Start(1000);
 
-      if (!activeEngines[mceAudio])
-        _AttachEngine(mceAudio);
-
       for (int i = 0 ; i < mceNumberOfItems ; i++) {
         enableFakeIn[i] = TRUE;
         enableFakeOut[i] = TRUE;
       }
-
-      if (activeEngines[mceAudio])
-        activeEngines[mceAudio]->RecvOnIdle(EngineBase::dtBusy);
     }
   }
 
@@ -1407,25 +1373,9 @@ PBoolean ModemEngineBody::Request(PStringToString &request)
     else
     if (CallToken().IsEmpty() || CallToken() == request("calltoken")) {
       SetCallState(cstAlerted);
-
-      if (state == stConnectWait && !pPlayTone && P.ModemClassId() == EngineBase::mcAudio) {
-        SetState(stConnectHandle, chConnected);
-        timerRing.Start(6000);
-
-        if (!activeEngines[mceAudio])
-          _AttachEngine(mceAudio);
-
-        enableFakeIn[mceAudio] = TRUE;
-        enableFakeOut[mceAudio] = TRUE;
-
-        if (activeEngines[mceAudio])
-          activeEngines[mceAudio]->RecvOnIdle(EngineBase::dtRing);
-
-        parent.SignalDataReady();
-        request.SetAt("response", "confirm");
-      }
     }
-    else {
+    else 
+    {
       myPTRACE(1, "ModemEngineBody::Request: line already in use by " << CallToken());
     }
   }
@@ -1443,9 +1393,6 @@ PBoolean ModemEngineBody::Request(PStringToString &request)
     else
     if (CallToken().IsEmpty() || CallToken() == request("calltoken")) {
       timerRing.Stop();
-
-      if (activeEngines[mceAudio])
-        activeEngines[mceAudio]->RecvOnIdle(EngineBase::dtNone);
 
       SetCallState(cstEstablished);
 
@@ -1496,7 +1443,7 @@ PBoolean ModemEngineBody::Request(PStringToString &request)
 
 EngineBase *ModemEngineBody::NewPtrEngine(ModemClassEngine mce)
 {
-  PAssert(mce == mceT38 || mce == mceAudio, "mce is not valid");
+  PAssert(mce == mceT38, "mce is not valid");
 
   PWaitAndSignal mutexWait(Mutex);
 
@@ -1513,18 +1460,20 @@ EngineBase *ModemEngineBody::NewPtrEngine(ModemClassEngine mce)
 
 void ModemEngineBody::_AttachEngine(ModemClassEngine mce)
 {
-  PAssert(mce == mceT38 || mce == mceAudio, "mce is not valid");
+  PAssert(mce == mceT38, "mce is not valid");
 
   if (activeEngines[mce] == NULL) {
     EngineBase *engine;
 
     switch (mce) {
       case mceT38:
-#if 1
+
+        // These three lines needed to get to T.38 Mode
+        // Opal now handles audio and switching
         sendOnIdle = EngineBase::dtCng;
         SetState(stReqModeAckWait);
         SetSubState(chConnectionEstablished);
-#endif
+
         engine = new T38Engine(parent.ptyName());
         break;
       default:
@@ -1571,7 +1520,7 @@ void ModemEngineBody::_AttachEngine(ModemClassEngine mce)
 
 void ModemEngineBody::_DetachEngine(ModemClassEngine mce)
 {
-  PAssert(mce == mceT38 || mce == mceAudio, "mce is not valid");
+  PAssert(mce == mceT38, "mce is not valid");
 
   if (activeEngines[mce] == NULL)
     return;
@@ -1606,12 +1555,6 @@ void ModemEngineBody::_DetachEngine(ModemClassEngine mce)
   switch (mce) {
     case mceT38:
       if (P.ModemClassId() == EngineBase::mcFax) {
-        currentClassEngine = NULL;
-        parent.SignalDataReady();
-      }
-      break;
-    case mceAudio:
-      if (P.ModemClassId() == EngineBase::mcAudio) {
         currentClassEngine = NULL;
         parent.SignalDataReady();
       }
@@ -1661,10 +1604,6 @@ void ModemEngineBody::OnEngineCallback(PObject & PTRACE_PARAM(from), INT extra)
             timeout.Stop();
             break;
           case stConnectHandle:
-            if (subState == chWaitPlayTone) {
-              SetSubState(chTonePlayed);
-              timeout.Stop();
-            }
             break;
           default:
             break;
@@ -1854,271 +1793,6 @@ PBoolean ModemEngineBody::HandleClass1Cmd(const char **ppCmd, PString &resp, PBo
         return FALSE;
     }
   }
-  return TRUE;
-}
-
-PBoolean ModemEngineBody::HandleClass8Cmd(const char **ppCmd, PString &resp, PBoolean &ok, PBoolean &crlf)
-{
-  PBoolean T;
-
-  switch (*(*ppCmd - 2)) {
-    case 'T':
-      T = TRUE;
-      break;
-    case 'R':
-      T = FALSE;
-      break;
-    default:
-      return FALSE;
-  }
-
-#define TONE_FREQUENCY_MIN  PDTMFEncoder::MinFrequency
-#define TONE_FREQUENCY_MAX  (8000/4)
-#define TONE_DMS_MAX        500
-#define TONE_VOLUME         15
-
-  switch (*(*ppCmd - 1)) {
-    case 'S':
-      switch (*(*ppCmd)++) {
-        case '=':
-          switch (**ppCmd) {
-            case '?': {
-              (*ppCmd)++;
-              resp += PString(PString::Printf, "\r\n(0,%u-%u),(0,%u-%u),(0-%u)",
-                              (unsigned)TONE_FREQUENCY_MIN, (unsigned)TONE_FREQUENCY_MAX,
-                              (unsigned)TONE_FREQUENCY_MIN, (unsigned)TONE_FREQUENCY_MAX,
-                              (unsigned)TONE_DMS_MAX);
-              crlf = TRUE;
-              break;
-            }
-            default:
-              if (P.ModemClassId() == EngineBase::mcAudio) {
-                ok = FALSE;
-
-                PDTMFEncoder tone;
-
-                for (;;) {
-                  int dms = P.Vtd();
-
-                  switch (**ppCmd) {
-                    case '[': {
-                      (*ppCmd)++;
-
-                      int f1 = 0;
-                      int f2 = 0;
-
-                      f1 = ParseNum(ppCmd, 0, 5, TONE_FREQUENCY_MAX, f1);
-
-                      if (f1 && f1 < TONE_FREQUENCY_MIN) {
-                        myPTRACE(1, "Parse error: wrong f1 before " << *ppCmd);
-                        return FALSE;
-                      }
-
-                      if (**ppCmd == ',') {
-                        (*ppCmd)++;
-                        f2 = ParseNum(ppCmd, 0, 5, TONE_FREQUENCY_MAX, f2);
-
-                        if (f2 && f2 < TONE_FREQUENCY_MIN) {
-                          myPTRACE(1, "Parse error: wrong f2 before " << *ppCmd);
-                          return FALSE;
-                        }
-
-                        if (**ppCmd == ',') {
-                          (*ppCmd)++;
-                          dms = ParseNum(ppCmd, 0, 5, TONE_DMS_MAX, dms);
-
-                          if (dms < 0) {
-                            myPTRACE(1, "Parse error: wrong dms before " << *ppCmd);
-                            return FALSE;
-                          }
-                        }
-                      }
-
-                      if (**ppCmd != ']') {
-                        myPTRACE(1, "Parse error: no ']' before " << *ppCmd);
-                        return FALSE;
-                      }
-
-                      if (dms) {
-                        unsigned ms = dms*10;
-                        char op;
-
-                        if (f1 && f2) {
-                          op = '+';
-                        }
-                        else
-                        if (f1) {
-                          op = '-';
-                        }
-                        else
-                        if (f2) {
-                          op = '-';
-                          f1 = f2;
-                          f2 = 0;
-                        }
-                        else {
-                          op = ' ';
-                        }
-
-                        if (!tone.Generate(op, f1, f2, ms, TONE_VOLUME)) {
-                          myPTRACE(1, "Cannot encode tone \"" << f1 << op << f2 << ":" << ms << "\"");
-                          return FALSE;
-                        }
-
-                        myPTRACE(2, "Encoded tone \"" << f1 << op << f2 << ":" << ms << "\", size=" << tone.GetSize());
-                      }
-
-                      (*ppCmd)++;
-                      break;
-                    }
-                    case '{': {
-                      (*ppCmd)++;
-
-                      char dtmf = **ppCmd;
-
-                      if (isdigit(dtmf) || (dtmf >= 'A' && dtmf <= 'C') || dtmf == '*' || dtmf == '#')
-                        (*ppCmd)++;
-                      else
-                        dtmf = ' ';
-
-                      if (**ppCmd == ',') {
-                        (*ppCmd)++;
-                        dms = ParseNum(ppCmd, 0, 5, TONE_DMS_MAX, dms);
-
-                        if (dms < 0) {
-                          myPTRACE(1, "Parse error: wrong dms before " << *ppCmd);
-                          return FALSE;
-                        }
-                      }
-
-                      if (**ppCmd != '}') {
-                        myPTRACE(1, "Parse error: no '}' before " << *ppCmd);
-                        return FALSE;
-                      }
-
-                      if (dms) {
-                        unsigned ms = dms*10;
-
-                        if (dtmf == ' ') {
-                          if (!tone.Generate(' ', 0, 0, ms)) {
-                            myPTRACE(1, "Cannot encode tone \"0 0:" << ms << "\"");
-                            return FALSE;
-                          }
-
-                          myPTRACE(2, "Encoded tone \"0 0:" << ms << "\", size=" << tone.GetSize());
-                        } else {
-                          tone.AddTone(dtmf, ms);
-                          myPTRACE(2, "Encoded DTMF tone \"" << dtmf << ":" << ms << "\", size=" << tone.GetSize());
-                        }
-                      }
-
-                      (*ppCmd)++;
-                      break;
-                    }
-                    case '0':
-                    case '1':
-                    case '2':
-                    case '3':
-                    case '4':
-                    case '5':
-                    case '6':
-                    case '7':
-                    case '8':
-                    case '9':
-                    case 'A':
-                    case 'B':
-                    case 'C':
-                    case 'D':
-                    case '*':
-                    case '#': {
-                      char dtmf = *(*ppCmd)++;
-                      unsigned ms = dms*10;
-
-                      tone.AddTone(dtmf, ms);
-                      myPTRACE(2, "Encoded DTMF tone \"" << dtmf << ":" << ms << "\", size=" << tone.GetSize());
-                      break;
-                    }
-                    case ',': {
-                      unsigned ms = dms*10;
-
-                      if (!tone.Generate(' ', 0, 0, ms)) {
-                        myPTRACE(1, "Cannot encode tone \"0 0:" << ms << "\"");
-                        return FALSE;
-                      }
-
-                      myPTRACE(2, "Encoded tone \"0 0:" << ms << "\", size=" << tone.GetSize());
-                      break;
-                    }
-                    default:
-                      break;
-                  }
-
-                  if (**ppCmd != ',')
-                    break;
-
-                  (*ppCmd)++;
-                }
-
-                PWaitAndSignal mutexWait(Mutex);
-                dataType = EngineBase::dtRaw;
-                moreFrames = FALSE;
-                SetState(stSend);
-                if (currentClassEngine && currentClassEngine->SendStart(dataType, 0)) {
-                  PINDEX len = tone.GetSize();
-
-                  if (len) {
-                    const PInt16 *ps = tone.GetPointer();
-                    currentClassEngine->Send(ps, len*sizeof(*ps));
-                  }
-
-                  SetState(stSendAckWait);
-
-                  if (!currentClassEngine->SendStop(FALSE, NextSeq())) {
-                    SetState(stCommand);
-                    return FALSE;
-                  }
-                } else {
-                  SetState(stCommand);
-                  return FALSE;
-                }
-              } else {
-                return FALSE;
-              }
-          }
-          break;
-        default:
-          return FALSE;
-      }
-      break;
-    case 'X':
-      if (P.ModemClassId() == EngineBase::mcAudio) {
-        ok = FALSE;
-
-        PString _resp;
-        PBoolean res = T ? SendStart(EngineBase::dtRaw, 0, _resp) : RecvStart(EngineBase::dtRaw, 0);
-
-        if (_resp.GetLength()) {
-          if (crlf) {
-            resp += "\r\n";
-            crlf = FALSE;
-          } else {
-            resp += RC_PREF();
-          }
-
-          resp += _resp;
-        }
-
-        if (!res)
-          PThread::Sleep(100);	// workaround
-
-        return res;
-      } else {
-        return FALSE;
-      }
-    default:
-      return FALSE;
-  }
-
   return TRUE;
 }
 
@@ -2671,7 +2345,7 @@ void ModemEngineBody::HandleCmdRest(PString &resp)
                         switch( *pCmd ) {
                           case '?':
                             pCmd++;
-                            resp += "\r\n1,8";
+                            resp += "\r\n1";
                             crlf = TRUE;
                             break;
                           default: {
@@ -2683,9 +2357,6 @@ void ModemEngineBody::HandleCmdRest(PString &resp)
                                 break;
                               case 1:
                                 modemClass = "1";
-                                break;
-                              case 8:
-                                modemClass = "8";
                                 break;
                               default:
                                 modemClass = NULL;
@@ -2911,495 +2582,6 @@ void ModemEngineBody::HandleCmdRest(PString &resp)
                         default:
                           err = TRUE;
                       }
-                      break;
-                    default:
-                      err = TRUE;
-                  }
-                  break;
-                default:
-                  err = TRUE;
-              }
-              break;
-            case 'V':	// Voice
-              switch (*pCmd++) {
-                case 'C':
-                  if (strncmp(pCmd, "ID", 2) == 0) {	// +VCID
-                    pCmd += 2;
-                    switch (*pCmd++) {
-                      case '=':
-                        switch (*pCmd) {
-                          case '?':
-                            pCmd++;
-                            resp += "\r\n(0,1)";
-                            crlf = TRUE;
-                            break;
-                          default:
-                            {
-                              int val = ParseNum(&pCmd);
-                              switch (val) {
-                                case 0:
-                                case 1: {
-                                  PWaitAndSignal mutexWait(Mutex);
-                                  P.CidMode((BYTE)val);
-                                  break;
-                                }
-                                default:
-                                  err = TRUE;
-                              }
-                            }
-                        }
-                        break;
-                      case '?':
-                        resp.sprintf("\r\n%u", (unsigned)P.CidMode());
-                        crlf = TRUE;
-                        break;
-                      default:
-                        err = TRUE;
-                    }
-                  } else {
-                    err = TRUE;
-                  }
-                  break;
-                case 'E':
-                  switch (*pCmd++) {
-                    case 'M':				// +VEM
-                      switch (*pCmd++) {
-                        case '=':
-                          switch (*pCmd) {
-                            case '?':
-                              pCmd++;
-                              resp += "\r\n(0)";
-                              crlf = TRUE;
-                              break;
-                            default:
-                              if (ParseNum(&pCmd) != 0)
-                                err = TRUE;
-                          }
-                          break;
-                        case '?':
-                          resp.sprintf("\r\n0");
-                          crlf = TRUE;
-                          break;
-                        default:
-                          err = TRUE;
-                      }
-                      break;
-                    default:
-                      err = TRUE;
-                  }
-                  break;
-                case 'G':
-                  switch (*pCmd++) {
-                    case 'R':				// +VGR
-                      switch (*pCmd++) {
-                        case '=':
-                          switch (*pCmd) {
-                            case '?':
-                              pCmd++;
-                              resp += "\r\n(0-255)";
-                              crlf = TRUE;
-                              break;
-                            default:
-                              {
-                                int val = ParseNum(&pCmd);
-
-                                if (val >= 0) {
-                                  PWaitAndSignal mutexWait(Mutex);
-                                  P.VgrInterval((BYTE)val);
-                                } else {
-                                  err = TRUE;
-                                }
-                              }
-                          }
-                          break;
-                        case '?':
-                          resp.sprintf("\r\n%u", (unsigned)P.VgrInterval());
-                          crlf = TRUE;
-                          break;
-                        default:
-                          err = TRUE;
-                      }
-                      break;
-                    case 'T':				// +VGT
-                      switch (*pCmd++) {
-                        case '=':
-                          switch (*pCmd) {
-                            case '?':
-                              pCmd++;
-                              resp += "\r\n(0-255)";
-                              crlf = TRUE;
-                              break;
-                            default:
-                              {
-                                int val = ParseNum(&pCmd);
-
-                                if (val >= 0) {
-                                  PWaitAndSignal mutexWait(Mutex);
-                                  P.VgtInterval((BYTE)val);
-                                } else {
-                                  err = TRUE;
-                                }
-                              }
-                          }
-                          break;
-                        case '?':
-                          resp.sprintf("\r\n%u", (unsigned)P.VgtInterval());
-                          crlf = TRUE;
-                          break;
-                        default:
-                          err = TRUE;
-                      }
-                      break;
-                    default:
-                      err = TRUE;
-                  }
-                  break;
-                case 'I':
-                  switch (*pCmd++) {
-                    case 'P':				// +VIP
-                      {
-                        int val;
-
-                        if (*pCmd == '=') {
-                          pCmd++;
-                          if (*pCmd == '?') {
-                            pCmd++;
-                            resp.sprintf("\r\n(0-%u)", sizeof(Profiles)/sizeof(Profiles[0]) - 1);
-                            crlf = TRUE;
-                            break;
-                          }
-
-                          val = ParseNum(&pCmd);
-
-                          if( val < 0 || val > ((int)(sizeof(Profiles)/sizeof(Profiles[0])) - 1)) {
-                            err = TRUE;
-                            break;
-                          }
-                        } else {
-                          val = 0;
-                        }
-
-                        PWaitAndSignal mutexWait(Mutex);
-                        P.SetVoiceProfile(Profiles[val]);
-                      }
-                      break;
-                    case 'T':				// +VIT
-                      switch (*pCmd++) {
-                        case '=':
-                          switch (*pCmd) {
-                            case '?':
-                              pCmd++;
-                              resp += "\r\n(0)";
-                              crlf = TRUE;
-                              break;
-                            default:
-                              if (ParseNum(&pCmd) < 0)
-                                err = TRUE;
-                          }
-                          break;
-                        case '?':
-                          resp.sprintf("\r\n0");
-                          crlf = TRUE;
-                          break;
-                        default:
-                          err = TRUE;
-                      }
-                      break;
-                    default:
-                      err = TRUE;
-                  }
-                  break;
-                case 'L':
-                  switch (*pCmd++) {
-                    case 'S':				// +VLS
-                      switch (*pCmd++) {
-                        case '=':
-                          switch (*pCmd) {
-                            case '?':
-                              pCmd++;
-                              resp += "\r\n0,\"\",00000000,00000000,00000000";
-                              resp += "\r\n1,\"T\",00000000,00000000,00000000";
-                              resp += "\r\n5,\"ST\",00000000,00000000,00000000";
-                              resp += "\r\n7,\"MST\",00000000,00000000,00000000";
-                              crlf = TRUE;
-                              break;
-                            default:
-                              switch (ParseNum(&pCmd)) {
-                                case 0: {
-                                  PWaitAndSignal mutexWait(Mutex);
-
-                                  if (off_hook || P.ClearMode())
-                                    OnHook();
-                                  break;
-                                }
-                                case 1:
-                                case 5:
-                                case 7:
-                                  ok = FALSE;
-
-                                  {
-                                    PWaitAndSignal mutexWait(Mutex);
-
-                                    callDirection = cdUndefined;
-                                    if (!Answer())
-                                      err = TRUE;
-                                  }
-                                  break;
-                                default:
-                                  err = TRUE;
-                              }
-                          }
-                          break;
-                        case '?':
-                          resp += off_hook ? "\r\n1" : "\r\n0";
-                          crlf = TRUE;
-                          break;
-                        default:
-                          err = TRUE;
-                      }
-                      break;
-                    default:
-                      err = TRUE;
-                  }
-                  break;
-                case 'R':
-                  switch (*pCmd++) {
-                    case 'A':				// +VRA
-                      switch (*pCmd++) {
-                        case '=':
-                          switch (*pCmd) {
-                            case '?':
-                              pCmd++;
-                              resp += "\r\n(0-255)";
-                              crlf = TRUE;
-                              break;
-                            default:
-                              {
-                                int val = ParseNum(&pCmd);
-
-                                if (val >= 0) {
-                                  PWaitAndSignal mutexWait(Mutex);
-                                  P.VraInterval((BYTE)val);
-                                } else {
-                                  err = TRUE;
-                                }
-                              }
-                          }
-                          break;
-                        case '?':
-                          resp.sprintf("\r\n%u", (unsigned)P.VraInterval());
-                          crlf = TRUE;
-                          break;
-                        default:
-                          err = TRUE;
-                      }
-                      break;
-                    case 'N':				// +VRN
-                      switch (*pCmd++) {
-                        case '=':
-                          switch (*pCmd) {
-                            case '?':
-                              pCmd++;
-                              resp += "\r\n(0-255)";
-                              crlf = TRUE;
-                              break;
-                            default:
-                              {
-                                int val = ParseNum(&pCmd);
-
-                                if (val >= 0) {
-                                  PWaitAndSignal mutexWait(Mutex);
-                                  P.VrnInterval((BYTE)val);
-                                } else {
-                                  err = TRUE;
-                                }
-                              }
-                          }
-                          break;
-                        case '?':
-                          resp.sprintf("\r\n%u", (unsigned)P.VrnInterval());
-                          crlf = TRUE;
-                          break;
-                        default:
-                          err = TRUE;
-                      }
-                      break;
-                    case 'X':				// +VRX
-                      if (!HandleClass8Cmd(&pCmd, resp, ok, crlf))
-                        err = TRUE;
-                      break;
-                    default:
-                      err = TRUE;
-                  }
-                  break;
-                case 'S':
-                  switch (*pCmd++) {
-                    case 'D':				// +VSD
-                      switch (*pCmd++) {
-                        case '=':
-                          switch (*pCmd) {
-                            case '?':
-                              pCmd++;
-                              resp += "\r\n(0-255),(0-255)";
-                              crlf = TRUE;
-                              break;
-                            default:
-                              {
-                                int sds = ParseNum(&pCmd);
-
-                                if (sds < 0 || *pCmd != ',') {
-                                  err = TRUE;
-                                  break;
-                                }
-
-                                pCmd++;
-
-                                int sdi = ParseNum(&pCmd);
-
-                                if (sdi < 0) {
-                                  err = TRUE;
-                                  break;
-                                }
-
-                                PWaitAndSignal mutexWait(Mutex);
-
-                                P.Vsds((BYTE)sds);
-                                P.Vsdi((BYTE)sdi);
-                              }
-                          }
-                          break;
-                        case '?':
-                          resp.sprintf("\r\n%u,%u", (unsigned)P.Vsds(), (unsigned)P.Vsdi());
-                          crlf = TRUE;
-                          break;
-                        default:
-                          err = TRUE;
-                      }
-                      break;
-                    case 'M':				// +VSM
-                      switch (*pCmd++) {
-                        case '=':
-                          switch (*pCmd) {
-                            case '?':
-                              pCmd++;
-                              resp += "\r\n0,\"SIGNED PCM\",8,0,(8000),(0),(0)";
-                              resp += "\r\n1,\"UNSIGNED PCM\",8,0,(8000),(0),(0)";
-                              resp += "\r\n4,\"G.711U\",8,0,(8000),(0),(0)";
-                              resp += "\r\n5,\"G.711A\",8,0,(8000),(0),(0)";
-                              resp += "\r\n128,\"8-BIT LINEAR\",8,0,(8000),(0),(0)";
-                              resp += "\r\n129,\"ADPCM (NOT IMPLEMENTED)\",0,0,(0),(0),(0)";
-                              resp += "\r\n130,\"UNSIGNED PCM\",8,0,(8000),(0),(0)";
-                              resp += "\r\n131,\"G.711 ULAW\",8,0,(8000),(0),(0)";
-                              resp += "\r\n132,\"G.711 ALAW\",8,0,(8000),(0),(0)";
-                              crlf = TRUE;
-                              break;
-                            default: {
-                              int cml = ParseNum(&pCmd);
-
-                              switch (cml) {
-                                case 0:
-                                case 1:
-                                case 4:
-                                case 5:
-                                case 128:
-                                case 130:
-                                case 131:
-                                case 132:
-                                  break;
-                                default:
-                                  err = TRUE;
-                              }
-
-                              if (err)
-                                break;
-
-                              if (*pCmd == ',') {
-                                pCmd++;
-
-                                int vsr = ParseNum(&pCmd, 4, 4, 8000);
-
-                                if (vsr != 8000) {
-                                  err = TRUE;
-                                  break;
-                                }
-
-                                int scs = 0;
-                                int sel = 0;
-
-                                if (*pCmd == ',') {
-                                  pCmd++;
-                                  scs = ParseNum(&pCmd);
-
-                                  if (scs != 0) {
-                                    err = TRUE;
-                                    break;
-                                  }
-
-                                  if (*pCmd == ',') {
-                                    pCmd++;
-                                    sel = ParseNum(&pCmd);
-
-                                    if (sel != 0) {
-                                      err = TRUE;
-                                      break;
-                                    }
-                                  }
-                                }
-                              }
-
-                              PWaitAndSignal mutexWait(Mutex);
-                              P.Vcml((BYTE)cml);
-                            }
-                          }
-                          break;
-                        case '?':
-                          resp.sprintf("\r\n%u,8000,0,0", (unsigned)P.Vcml());
-                          crlf = TRUE;
-                          break;
-                        default:
-                          err = TRUE;
-                      }
-                      break;
-                    default:
-                      err = TRUE;
-                  }
-                  break;
-                case 'T':
-                  switch (*pCmd++) {
-                    case 'D':				// +VTD
-                      switch (*pCmd++) {
-                        case '=':
-                          switch (*pCmd) {
-                            case '?':
-                              pCmd++;
-                              resp += "\r\n(0-255)";
-                              crlf = TRUE;
-                              break;
-                            default:
-                              {
-                                int val = ParseNum(&pCmd);
-
-                                if (val >= 0) {
-                                  PWaitAndSignal mutexWait(Mutex);
-                                  P.Vtd((BYTE)val);
-                                } else {
-                                  err = TRUE;
-                                }
-                              }
-                          }
-                          break;
-                        case '?':
-                          resp.sprintf("\r\n%u", (unsigned)P.Vtd());
-                          crlf = TRUE;
-                          break;
-                        default:
-                          err = TRUE;
-                      }
-                      break;
-                    case 'X':				// +VTX
-                    case 'S':				// +VTS
-                      if (!HandleClass8Cmd(&pCmd, resp, ok, crlf))
-                        err = TRUE;
                       break;
                     default:
                       err = TRUE;
@@ -3745,41 +2927,6 @@ void ModemEngineBody::HandleData(const PBYTEArray &buf, PBYTEArray &bresp)
                       }
                   }
                   dataCount += count;
-                  if (P.ModemClassId() == EngineBase::mcAudio) {
-                    if (currentClassEngine) {
-                      const signed char *pb = (const signed char *)Buf;
-                      PInt16 Buf2[sizeof(Buf)];
-                      PInt16 *ps = Buf2;
-
-                      switch (P.Vcml()) {
-                        case 0:
-                          while (count--)
-                            *ps++ = (PInt16)((PInt16)(*pb++)*256);
-                          break;
-                        case 1:
-                        case 128:
-                        case 130:
-                          while (count--)
-                            *ps++ = (PInt16)((PInt16)(*pb++)*256 - 0x8000);
-                          break;
-                        case 4:
-                        case 131:
-                          while (count--)
-                            *ps++ = (PInt16)ulaw2linear(*pb++);
-                          break;
-                        case 5:
-                        case 132:
-                          while (count--)
-                            *ps++ = (PInt16)alaw2linear(*pb++);
-                          break;
-                      }
-
-                      count = int(pb - (const signed char *)Buf);
-
-                      currentClassEngine->Send(Buf2, count*sizeof(*ps));
-                    }
-                  }
-                  else
                   if (P.ModemClassId() == EngineBase::mcFax) {
                     if (currentClassEngine)
                       currentClassEngine->Send(Buf, count);
@@ -3809,23 +2956,11 @@ void ModemEngineBody::HandleData(const PBYTEArray &buf, PBYTEArray &bresp)
             PWaitAndSignal mutexWait(Mutex);
             timeout.Stop();
 
-            if (state == stRecv && (dataCount || P.ModemClassId() == EngineBase::mcAudio)) {
-              PBYTEArray _bresp((const BYTE *)"\x10\x03", 2); // add <DLE><ETX>
-
-              myPTRACE(1, "<-- " << PRTHEX(_bresp));
-              bresp.Concatenate(_bresp);
-            }
-
             SetState(stCommand);
 
             PString resp = RC_PREF();
 
-            if (currentClassEngine || P.ModemClassId() == EngineBase::mcAudio) {
-              if (currentClassEngine)
-                currentClassEngine->ResetModemState();
-
-              resp += RC_OK();
-            } else {
+            {
               OnHook();
               resp += RC_NO_CARRIER();
             }
@@ -3845,22 +2980,8 @@ void ModemEngineBody::CheckState(PBYTEArray & bresp)
   PWaitAndSignal mutexWait(Mutex);
 
   if (cmd.IsEmpty()) {
-    if (timerBusy.Get()) {
-      if (P.ModemClassId() == EngineBase::mcAudio) {
-        PBYTEArray _bresp((const BYTE *)"\x10" "b", 2);		// <DLE>b
-        bresp.Concatenate(_bresp);
-        myPTRACE(2, "<-- DLE " << PRTHEX(_bresp));
-      }
-    }
 
     if (timerRing.Get()) {
-      if (off_hook && !pPlayTone && P.ModemClassId() == EngineBase::mcAudio) {
-        BYTE b[2] = {'\x10', 'r'};
-        PBYTEArray _bresp(b, sizeof(b));
-        bresp.Concatenate(_bresp);
-        myPTRACE(2, "<-- DLE " << PRTHEX(_bresp));
-      }
-      else
       if (!off_hook && callState == cstCalled) {
         resp = RC_RING();
         BYTE ringCount = P.RingCount();
@@ -3956,9 +3077,6 @@ void ModemEngineBody::CheckState(PBYTEArray & bresp)
 
         if (engine->RecvUserInput(&c, 1) <= 0)
           break;
-
-        if ((!P.ModemClassId()) == EngineBase::mcAudio)
-          continue;
 
         switch (c) {
           case '0':
@@ -4067,87 +3185,12 @@ void ModemEngineBody::CheckState(PBYTEArray & bresp)
     case stConnectHandle:
       {
         switch(subState) {
-#if 0
-          case chConnected:
-            if (!activeEngines[mceAudio]) {
-              SetSubState(chWaitAudioEngine);
-              timeout.Start(60000);
-              break;
-            }
-            SetSubState(chAudioEngineAttached);
-          case chAudioEngineAttached:
-            if (pPlayTone) {
-              if (!activeEngines[mceAudio]) {
-                SetSubState(chWaitAudioEngine);
-                break;
-              }
-
-              if (!activeEngines[mceAudio]->IsOpenOut())
-                break;
-
-              PBoolean err = FALSE;
-
-              if (activeEngines[mceAudio]->SendStart(EngineBase::dtRaw, 0)) {
-                PINDEX len = pPlayTone->GetSize();
-
-                if (len) {
-                  const PInt16 *ps = pPlayTone->GetPointer();
-                  activeEngines[mceAudio]->Send(ps, len*sizeof(*ps));
-                }
-
-                SetSubState(chWaitPlayTone);
-                if (activeEngines[mceAudio]->SendStop(FALSE, NextSeq())) {
-                  timeout.Start(60000);
-                } else {
-                  SetSubState(chAudioEngineAttached);
-                  err = TRUE;
-                }
-              } else {
-                err = TRUE;
-              }
-
-              if (err) {
-                resp = RC_ERROR();
-                SetState(stCommand);
-                OnHook();
-              }
-
-              if (pPlayTone) {
-                delete pPlayTone;
-                pPlayTone = NULL;
-              }
-              break;
-            }
-            SetSubState(chTonePlayed);
-          case chTonePlayed:
-            if (!connectionEstablished && P.ModemClassId() == EngineBase::mcFax) {
-              SetSubState(chConnectionEstablishDelay);
-              timeout.Start(1000);    // wait 1 sec before request mode
-              break;
-            }
-            SetSubState(chConnectionEstablished);
-#endif
           case chConnectionEstablished:
             if (callDirection == cdOutgoing && P.ModemClassId() == EngineBase::mcFax)
               SendOnIdle(EngineBase::dtCng);
 
             connectionEstablished = TRUE;
-            enableFakeIn[mceAudio] = TRUE;
-            enableFakeOut[mceAudio] = TRUE;
 
-            if (P.ModemClassId() == EngineBase::mcAudio || callDirection == cdUndefined) {
-              SetState(stCommand);
-              timeout.Stop();
-
-              PString _resp;
-              HandleCmdRest(_resp);
-
-              PBYTEArray _bresp((const BYTE *)(const char *)_resp, _resp.GetLength());
-
-              myPTRACE(1, "<-- " << PRTHEX(_bresp));
-              bresp.Concatenate(_bresp);
-            }
-            else
             if (activeEngines[mceT38]) {
               SetState(stReqModeAckHandle);
               timeout.Stop();
@@ -4248,12 +3291,6 @@ void ModemEngineBody::CheckState(PBYTEArray & bresp)
           SetState(stCommand);
         }
         else
-        if (P.ModemClassId() == EngineBase::mcAudio) {
-          resp = RC_CONNECT();
-          SetState(stRecv);
-          parent.SignalDataReady();	// try to Recv w/o delay
-        }
-        else
         if (P.ModemClassId() == EngineBase::mcFax) {
           if ((currentClassEngine->RecvDiag() & EngineBase::diagDiffSig) == 0) {
             if (dataType != EngineBase::dtRaw) {
@@ -4283,9 +3320,6 @@ void ModemEngineBody::CheckState(PBYTEArray & bresp)
 
         for(;;) {
           if (!currentClassEngine) {
-            if (P.ModemClassId() != EngineBase::mcAudio)
-              dleData.SetDiag(EngineBase::diagError);
-
             dleData.PutEof();
             count = -1;
             break;
@@ -4295,9 +3329,7 @@ void ModemEngineBody::CheckState(PBYTEArray & bresp)
 
           switch (count) {
             case -1:
-              if (P.ModemClassId() == EngineBase::mcAudio) {
-                dleData.PutEof();
-              } else {
+              {
                 int diag = currentClassEngine->RecvDiag();
 
                 if (dataType == EngineBase::dtHdlc) {
@@ -4348,52 +3380,11 @@ void ModemEngineBody::CheckState(PBYTEArray & bresp)
                 default:
                   myPTRACE(1, "Unexpected dataType=" << dataType);
                 }
-              } else {
-                const PInt16 *ps = (const PInt16 *)Buf;
-                signed char *pb = (signed char *)Buf;
-
-                count /= sizeof(*ps);
-
-                switch (P.Vcml()) {
-                  case 0:
-                    while (count--)
-                      *pb++ = (signed char)((*ps++)/256);
-                    break;
-                  case 1:
-                  case 128:
-                  case 130:
-                    while (count--)
-                      *pb++ = (signed char)((*ps++ + 0x8000)/256);
-                    break;
-                  case 4:
-                  case 131:
-                    while (count--)
-                      *pb++ = (signed char)linear2ulaw(*ps++);
-                    break;
-                  case 5:
-                  case 132:
-                    while (count--)
-                      *pb++ = (signed char)linear2alaw(*ps++);
-                    break;
-                }
-
-                count = int(pb - (signed char *)Buf);
-
-                dleData.PutData(Buf, count);
-              }
-
+              } 
               dataCount += count;
           }
           if (count <= 0)
             break;
-        }
-
-        if (P.ModemClassId() == EngineBase::mcAudio) {
-          if (count < 0) {
-            PBYTEArray _bresp((const BYTE *)"\x10" "b", 2);	// <DLE>b
-            bresp.Concatenate(_bresp);
-            myPTRACE(2, "<-- DLE " << PRTHEX(_bresp));
-          }
         }
 
         for(;;) {
@@ -4404,10 +3395,6 @@ void ModemEngineBody::CheckState(PBYTEArray & bresp)
               {
                 SetState(stCommand);
 
-                if (P.ModemClassId() == EngineBase::mcAudio) {
-                  resp = RC_OK();
-                }
-                else
                 if (dataType == EngineBase::dtHdlc) {
                   int diag = dleData.GetDiag();
 
