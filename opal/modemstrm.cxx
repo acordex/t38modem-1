@@ -115,9 +115,16 @@ PBoolean AudioModemMediaStream::Open()
 
 #if (OPAL_PACK_VERSION(OPAL_MAJOR, OPAL_MINOR, OPAL_BUILD) >= OPAL_PACK_VERSION(3, 10, 5))
 void AudioModemMediaStream::InternalClose()
+{
+  PTRACE(3, "AudioModemMediaStream::Close " << *this);
+
+  if (IsSink())
+    audioEngine->CloseIn(EngineBase::HOWNERIN(this));
+  else
+    audioEngine->CloseOut(EngineBase::HOWNEROUT(this));
+}
 #else
 PBoolean AudioModemMediaStream::Close()
-#endif
 {
   if (isOpen) {
     PTRACE(3, "AudioModemMediaStream::Close " << *this);
@@ -128,10 +135,9 @@ PBoolean AudioModemMediaStream::Close()
       audioEngine->CloseOut(EngineBase::HOWNEROUT(this));
   }
 
-#if (OPAL_PACK_VERSION(OPAL_MAJOR, OPAL_MINOR, OPAL_BUILD) < OPAL_PACK_VERSION(3, 10, 5))
   return OpalMediaStream::Close();
-#endif
 }
+#endif
 
 PBoolean AudioModemMediaStream::ReadData(BYTE * data, PINDEX size, PINDEX & length)
 {
@@ -199,11 +205,26 @@ PBoolean T38ModemMediaStream::Open()
 
 #if (OPAL_PACK_VERSION(OPAL_MAJOR, OPAL_MINOR, OPAL_BUILD) >= OPAL_PACK_VERSION(3, 10, 5))
 void T38ModemMediaStream::InternalClose()
+{
+  PTRACE(3, "T38ModemMediaStream::InternalClose " << *this);
+
+  if (IsSink()) {
+    PTRACE(2, "T38ModemMediaStream::Close Send statistics:"
+              " sequence=" << currentSequenceNumber <<
+              " lost=" << totallost);
+
+    t38engine->CloseIn(EngineBase::HOWNERIN(this));
+  } else {
+    PTRACE(2, "T38ModemMediaStream::Close Receive statistics:"
+              " sequence=" << currentSequenceNumber);
+
+    t38engine->CloseOut(EngineBase::HOWNEROUT(this));
+  }
+}
 #else
 PBoolean T38ModemMediaStream::Close()
-#endif
 {
-  if (isOpen) {
+  if (isOpen == isOpen) {
     PTRACE(3, "T38ModemMediaStream::Close " << *this);
 
     if (IsSink()) {
@@ -220,10 +241,9 @@ PBoolean T38ModemMediaStream::Close()
     }
   }
 
-#if (OPAL_PACK_VERSION(OPAL_MAJOR, OPAL_MINOR, OPAL_BUILD) < OPAL_PACK_VERSION(3, 10, 5))
   return OpalMediaStream::Close();
-#endif
 }
+#endif
 
 void T38ModemMediaStream::OnStartMediaPatch()
 {
