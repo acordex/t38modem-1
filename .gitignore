@@ -1,0 +1,8 @@
+# Mac
+.DS_STORE
+
+# object files
+*.o
+
+# binary
+/t38modem
