@@ -134,7 +134,9 @@ OBJECTS		:= pmutils.o dle.o pmodem.o pmodemi.o drivers.o \
 #		   drv_pty.cxx \
 #		   main_process.cxx
 
-USE_UNIX98_PTY := 1
+ifndef USE_UNIX98_PTY
+	USE_UNIX98_PTY := 1
+endif
 CPPFLAGS += `pkg-config --cflags opal`
 LDFLAGS  += `pkg-config --libs opal`
 CPPFLAGS += -DUSE_OPAL
@@ -202,7 +204,9 @@ endif
 # Both schemes cen be used simultaneously.
 #
 ifdef USE_UNIX98_PTY
-  CPPFLAGS += -DUSE_UNIX98_PTY
+  ifneq ($(USE_UNIX98_PTY), 0)
+    CPPFLAGS += -DUSE_UNIX98_PTY
+  endif
 
   ifdef USE_LEGACY_PTY
     CPPFLAGS += -DUSE_LEGACY_PTY
