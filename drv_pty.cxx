@@ -94,6 +94,13 @@
 #include <ptlib.h>
 #include "drv_pty.h"
 
+// Needed for devname_r, fileno below
+#ifdef __APPLE__
+#include <sys/stat.h>
+#include <stdlib.h>
+#include <stdio.h>
+#endif
+
 #ifdef MODEM_DRIVER_Pty
 
 #include <sys/poll.h>
@@ -563,7 +570,13 @@ PBoolean PseudoModemPty::OpenPty()
 
     char ptsName[64];
 
-    if (::ptsname_r(hPty, ptsName, sizeof(ptsName)) != 0) {
+	#ifdef __APPLE__
+	struct stat buf;
+	fstat(hPty, &buf);
+	if (::devname_r(buf.st_rdev, S_IFCHR, ptsName, sizeof(ptsName)) != 0) {
+	#else
+	if (::ptsname_r(hPty, ptsName, sizeof(ptsName)) != 0) {
+	#endif
       int err = errno;
       myPTRACE(1, "PseudoModemPty::OpenPty ptsname_r " << ptyname << " ERROR: " << strerror(err));
       ClosePty();
