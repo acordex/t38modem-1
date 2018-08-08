@@ -244,7 +244,7 @@ void RenameCurrentThread(const PString &newname)
         + ":" + PString((unsigned)getpid())
     #else
       #if defined(P_PTHREADS)
-        + ":" + PString((unsigned)pthread_self())
+        + ":" + PString((uintptr_t)pthread_self())
       #else
         + ":%0x"
       #endif
