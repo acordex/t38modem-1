@@ -207,8 +207,9 @@ class ModemConnection : public OpalConnection
       pmmFaxNoForce,
     };
 
+	/* Delay added by Acordex to allow for delays between retries */
     bool RequestMode(
-      PseudoModemMode mode
+      PseudoModemMode mode, int delay
     );
 
     bool OnSwitchingFaxMediaStreams(bool toT38);
@@ -223,6 +224,7 @@ class ModemConnection : public OpalConnection
     EngineBase *userInputEngine;
     PseudoModemMode requestedMode;
     bool isPartyA;
+	int mDelay;		// Acordex added delay in ms between retries
 
     PDECLARE_NOTIFIER(PTimer,  ModemConnection, OnPhaseTimeout);
     PTimer phaseTimer;
@@ -424,7 +426,7 @@ void ModemEndPoint::OnMyCallback(PObject &from, INT myPTRACE_PARAM(extra))
       if (pConn != NULL) {
         pConn->AcceptIncoming();
         response = "confirm";
-      }
+      } else PTRACE(0, "connection lost before answer complete");
     } else if (command == "requestmode") {
       PSafePtr<ModemConnection> pConn =
           PSafePtrCast<OpalConnection, ModemConnection>(GetConnectionWithLock(request("calltoken"), PSafeReference));
@@ -437,13 +439,19 @@ void ModemEndPoint::OnMyCallback(PObject &from, INT myPTRACE_PARAM(extra))
         if (newModeString == "fax-no-force")  { mode = ModemConnection::pmmFaxNoForce;  } else
                                               { mode = ModemConnection::pmmUnknown;     }
 
+	    /* Acordex added to specify delay between retries */
+        const PString &delayString = request("delay");
+        int delayVal = 0;
+        if (delayString != NULL)
+			delayVal = delayString.AsInteger();
+		
         if (mode != ModemConnection::pmmUnknown) {
-          if (pConn->RequestMode(mode))
+          if (pConn->RequestMode(mode, delayVal))
             response = "confirm";
         } else {
-          myPTRACE(1, "ModemEndPoint::OnMyCallback: unknown mode " << newModeString);
+          myPTRACE(0, "ModemEndPoint::OnMyCallback: unknown mode " << newModeString);
         }
-      }
+      } else myPTRACE(0, "ModemEndPoint::OnMyCallback: pConn == null");
     } else if (command == "clearcall") {
       PSafePtr<ModemConnection> pConn =
           PSafePtrCast<OpalConnection, ModemConnection>(GetConnectionWithLock(request("calltoken"), PSafeReference));
@@ -569,6 +577,7 @@ ModemConnection::ModemConnection(
   , userInputEngine(NULL)
   , requestedMode(pmmAny)
   , isPartyA(userData != NULL)
+  , mDelay(0)    // Acordex added
   , phaseTimerPhase(NumPhases)
   , phaseWasTimeout(false)
 {
@@ -593,6 +602,8 @@ ModemConnection::~ModemConnection()
     PStringToString request;
     request.SetAt("command", "clearcall");
     request.SetAt("calltoken", GetToken());
+    /* Acordex added to logging call failure reason */
+    request.SetAt("dialresult", GetCallEndReasonText());
 
     if (isPartyA) {
       switch (GetCallEndReason()) {
@@ -678,7 +689,10 @@ OpalMediaStream * ModemConnection::CreateMediaStream(
 void ModemConnection::OnReleased()
 {
   myPTRACE(1, "ModemConnection::OnReleased " << *this);
-
+  if (mDelay != 0) { //  Acordex added
+ 	myPTRACE(0, "ModemConnection::Released with mDelay set!");
+  	mDelay = 0;
+  	}
   OpalConnection::OnReleased();
 }
 
@@ -735,17 +749,18 @@ PBoolean ModemConnection::SetUpConnection()
 
   PString dstNum = GetRemotePartyNumber();
 
-  myPTRACE(1, "ModemConnection::SetUpConnection"
+// Acordex removed for stronger logging below
+/*  myPTRACE(1, "ModemConnection::SetUpConnection"
            << " dstNum=" << dstNum
            << " srcNum=" << srcNum
            << " srcName=" << srcName
-           << " ...");
+           << " ..."); Acordex tracing changed below */
 
   ModemEndPoint &ep = (ModemEndPoint &)GetEndPoint();
   PseudoModem *_pmodem = ep.PMAlloc(dstNum);
 
   if (_pmodem == NULL) {
-    myPTRACE(1, "... denied (all modems busy)");
+    myPTRACE(0, "Inbound call from " << srcNum << " to " << dstNum << " denied (all modems busy!)");
     // LXK change -- Use EndedByLocalBusy instead of EndedByLocalUser
     // so that caller receives a normal busy signal instead of a
     // fast busy (congestion) or recorded message.
@@ -754,7 +769,7 @@ PBoolean ModemConnection::SetUpConnection()
   }
 
   if (pmodem != NULL) {
-    myPTRACE(1, "... denied (internal error)");
+    myPTRACE(0, "Inbound call from " << srcNum << " to " << dstNum << " denied (internal error)");
     ep.PMFree(_pmodem);
     Release(EndedByLocalBusy);  // LXK change -- see above
     return FALSE;
@@ -770,18 +785,18 @@ PBoolean ModemConnection::SetUpConnection()
   request.SetAt("dstnum", dstNum);
 
   if (!pmodem->Request(request)) {
-    myPTRACE(1, "... denied (modem is not ready)");	// or we can try other modem
+    myPTRACE(0, "Inbound call from " << srcNum << " to " << dstNum << " denied (modem is not ready)");	// or we can try other modem
     Release(EndedByLocalBusy);  // LXK change -- see above
     return FALSE;
   }
 
   if (request("response") != "confirm") {
-    myPTRACE(1, "... denied (no confirm)");
+    myPTRACE(0, "Inbound call from " << srcNum << " to " << dstNum << " denied (no confirm)");
     Release(EndedByLocalUser);
     return FALSE;
   }
 
-  myPTRACE(1, "... Ok");
+  myPTRACE(0, "Inbound call from " << srcNum << " to " << dstNum << " accepted");
 
   SetPhase(AlertingPhase);
   OnAlerting();
@@ -824,13 +839,16 @@ OpalMediaFormatList ModemConnection::GetMediaFormats() const
 
   switch (requestedMode) {
     case pmmFax:
-      for (PINDEX i = 0 ; i < mediaFormats.GetSize() ; i++) {
-        if (mediaFormats[i].GetMediaType() != OpalMediaType::Fax()) {
-          PTRACE(3, "ModemConnection::GetMediaFormats Remove " << mediaFormats[i]);
-          mediaFormats -= mediaFormats[i];
-          i--;
-        }
-      }
+	  // Acordex CB 3/4/11 - allow request to auto before we issue request to fax to work
+      if (mDelay == 0) {
+		  for (PINDEX i = 0 ; i < mediaFormats.GetSize() ; i++) {
+			if (mediaFormats[i].GetMediaType() != OpalMediaType::Fax()) {
+			  PTRACE(3, "ModemConnection::GetMediaFormats Remove " << mediaFormats[i]);
+			  mediaFormats -= mediaFormats[i];
+			  i--;
+			}
+		  }
+	  }
       break;
     default:
       break;
@@ -894,48 +912,72 @@ PBoolean ModemConnection::SendUserInputTone(char tone, unsigned PTRACE_PARAM(dur
 
 void ModemConnection::RequestMode(PThread &, INT faxMode)
 {
-  PSafePtr<OpalConnection> other = GetOtherPartyConnection();
+  int retry = 0;
+  
+  /* Acordex added loop of retries with delay between each try */
+  while (true)
+  {
+	if (mDelay != 0 && faxMode) {
+		PThread::Sleep(mDelay);
+		if (mDelay == 0) {
+		  myPTRACE(0, "ModemConnection::RequestMode discovered released");
+		  break;
+		  }
+		mDelay = 0;
+	 }
+	 bool done = false;
+	 {	
+		if (&GetCall() == NULL) {
+			 myPTRACE(0, "ModemConnection::RequestMode call no longer in progress");
+			break;
+			}
 
-  if (other != NULL) {
-    if (!LockReadWrite()) {
-      myPTRACE(1, "ModemConnection::RequestMode " << *this << " Can't lock");
-      return;
-    }
+		PSafePtr<OpalConnection> other = GetOtherPartyConnection();
 
-    bool done = false;
+		if (other == NULL) break;
 
-    if (faxMode) {
-      OpalMediaFormatList otherMediaFormats = other->GetMediaFormats();
-      other->AdjustMediaFormats(false, NULL, otherMediaFormats);
+		if (!LockReadWrite()) {
+		  myPTRACE(0, "ModemConnection::RequestMode " << *this << " Can't lock");
+		  return;
+		}
 
-      PTRACE(4, "ModemConnection::RequestMode: other connection formats: \n" <<
-                setfill('\n') << otherMediaFormats << setfill(' '));
+		if (faxMode) {
+		  OpalMediaFormatList otherMediaFormats = other->GetMediaFormats();
+		  other->AdjustMediaFormats(false, NULL, otherMediaFormats);
 
-      if (!otherMediaFormats.HasType(OpalMediaType::Fax())) {
-        PTRACE(3, "ModemConnection::RequestMode: other connection has not fax type");
+		  PTRACE(4, "ModemConnection::RequestMode: other connection formats: \n" <<
+					setfill('\n') << otherMediaFormats << setfill(' '));
 
-        faxMode = false;
-        done = UpdateMediaStreams(*other);
-      }
-      else
-      if (GetStringOptions().GetBoolean("No-Force-T38-Mode")) {
-        PTRACE(3, "ModemConnection::RequestMode: No-Force-T38-Mode=true");
+		  if (!otherMediaFormats.HasType(OpalMediaType::Fax())) {
+			PTRACE(3, "ModemConnection::RequestMode: other connection has not fax type");
 
-        faxMode = false;
-        done = UpdateMediaStreams(*other);
-      }
-    }
+			faxMode = false;
+			done = UpdateMediaStreams(*other);
+		  }
+		  else
+		  if (GetStringOptions().GetBoolean("No-Force-T38-Mode")) {
+			PTRACE(3, "ModemConnection::RequestMode: No-Force-T38-Mode=true");
 
-    if (!done && !other->SwitchFaxMediaStreams(faxMode)) {
-      myPTRACE(1, "ModemConnection::RequestMode " << *this << " Change to mode " <<
-                  (faxMode ? "fax" : "audio") << " failed");
-    }
+			faxMode = false;
+			done = UpdateMediaStreams(*other);
+		  }
+		}
 
-    UnlockReadWrite();
-  }
+		if (!done && !other->SwitchFaxMediaStreams(faxMode)) {
+		  myPTRACE(0, "ModemConnection::RequestMode " << *this << " Change to mode " <<
+					  (faxMode ? "fax" : "audio") << " failed");
+		} else done = true;
+
+		UnlockReadWrite();
+	  }
+	  if (done || !faxMode || ++retry >= 3) break;
+	  PTRACE(0, "ModemConnection::RequestMode: Retry " << retry);
+	  mDelay = 3000;
+	}
 }
 
-bool ModemConnection::RequestMode(PseudoModemMode mode)
+/* Acordex added delayVal paramter for passing requested delay in ms */
+bool ModemConnection::RequestMode(PseudoModemMode mode, int delayVal)
 {
   int ForceFaxModeDelay = 0; 
 
@@ -959,7 +1001,7 @@ bool ModemConnection::RequestMode(PseudoModemMode mode)
         }
 
         PTRACE(3, "ModemConnection::RequestMode: force fax mode for other connection");
-
+		mDelay = delayVal;
         if (isPartyA) {                                // only delay if we are the caller
           ForceFaxModeDelay = GetStringOptions()("Force-Fax-Mode-Delay").AsInteger();
           PTRACE(3, "ModemConnection::RequestMode: wait " << ForceFaxModeDelay << " seconds for force fax mode");
@@ -1142,14 +1184,14 @@ bool ModemConnection::UpdateMediaStreams(OpalConnection &other)
             "<------> " << setfill(',') << otherMediaFormats << setfill(' '));
 
   if (otherMediaFormats.GetSize() < 1) {
-    PTRACE(2, "ModemConnection::UpdateMediaStreams: other connection has no capable media formats");
+    PTRACE(0, "ModemConnection::UpdateMediaStreams: other connection has no capable media formats");
     return false;
   }
 
   OpalMediaStreamPtr otherSink = FindMediaStream(other, otherMediaFormats, false);
 
   if (otherSink == NULL) {
-    PTRACE(2, "ModemConnection::UpdateMediaStreams: other connection has no capable sink media streams");
+    PTRACE(0, "ModemConnection::UpdateMediaStreams: other connection has no capable sink media streams");
     return false;
   }
 
@@ -1165,7 +1207,7 @@ bool ModemConnection::UpdateMediaStreams(OpalConnection &other)
   OpalMediaStreamPtr otherSource = FindMediaStream(other, otherMediaFormats, true);
 
   if (otherSource == NULL) {
-    PTRACE(2, "ModemConnection::UpdateMediaStreams: other connection has no capable source media streams");
+    PTRACE(0, "ModemConnection::UpdateMediaStreams: other connection has no capable source media streams");
     return false;
   }
 
@@ -1179,7 +1221,7 @@ bool ModemConnection::UpdateMediaStreams(OpalConnection &other)
   OpalMediaFormat thisSourceFormat;
 
   if (thisSource != NULL) {
-    PTRACE(4, "ModemConnection::UpdateMediaStreams: no need to replace " << *thisSource << " --> " << *otherSink);
+    PTRACE(0, "ModemConnection::UpdateMediaStreams: no need to replace " << *thisSource << " --> " << *otherSink);
   } else {
     if (!GetCall().SelectMediaFormats(
                                        otherSinkFormat.GetMediaType(),
@@ -1189,7 +1231,7 @@ bool ModemConnection::UpdateMediaStreams(OpalConnection &other)
                                        thisSourceFormat,
                                        otherSinkFormat))
     {
-      PTRACE(3, "ModemConnection::UpdateMediaStreams: can't select source format for sink " << otherSink);
+      PTRACE(0, "ModemConnection::UpdateMediaStreams: can't select source format for sink " << otherSink);
       return false;
     }
 
@@ -1201,7 +1243,7 @@ bool ModemConnection::UpdateMediaStreams(OpalConnection &other)
   OpalMediaFormat thisSinkFormat;
 
   if (thisSink != NULL) {
-    PTRACE(4, "ModemConnection::UpdateMediaStreams: no need to replace " << *thisSink << " <-- " << *otherSource);
+    PTRACE(0, "ModemConnection::UpdateMediaStreams: no need to replace " << *thisSink << " <-- " << *otherSource);
   } else {
     if (!GetCall().SelectMediaFormats(
                                        otherSourceFormat.GetMediaType(),
@@ -1211,7 +1253,7 @@ bool ModemConnection::UpdateMediaStreams(OpalConnection &other)
                                        otherSourceFormat,
                                        thisSinkFormat))
     {
-      PTRACE(3, "ModemConnection::UpdateMediaStreams: can't select sink format for source " << otherSource);
+      PTRACE(0, "ModemConnection::UpdateMediaStreams: can't select sink format for source " << otherSource);
       return false;
     }
 
@@ -1230,7 +1272,7 @@ bool ModemConnection::UpdateMediaStreams(OpalConnection &other)
     thisSource = OpenMediaStream(thisSourceFormat, otherSinkSessionID, true);
 
     if (thisSource == NULL) {
-      PTRACE(3, "ModemConnection::UpdateMediaStreams: can't open source stream");
+      PTRACE(0, "ModemConnection::UpdateMediaStreams: can't open source stream");
       return false;
     }
 
@@ -1239,7 +1281,7 @@ bool ModemConnection::UpdateMediaStreams(OpalConnection &other)
                 otherSink->RequiresPatchThread(thisSource) && thisSource->RequiresPatchThread(otherSink));
 
     if (patch == NULL) {
-      PTRACE(3, "ModemConnection::UpdateMediaStreams: can't create patch for " << *thisSource);
+      PTRACE(0, "ModemConnection::UpdateMediaStreams: can't create patch for " << *thisSource);
       return false;
     }
 
@@ -1263,7 +1305,7 @@ bool ModemConnection::UpdateMediaStreams(OpalConnection &other)
     thisSink = OpenMediaStream(thisSinkFormat, otherSinkSessionID, false);
 
     if (thisSink == NULL) {
-      PTRACE(3, "ModemConnection::UpdateMediaStreams: can't open sink stream");
+      PTRACE(0, "ModemConnection::UpdateMediaStreams: can't open sink stream");
       return false;
     }
 
@@ -1272,7 +1314,7 @@ bool ModemConnection::UpdateMediaStreams(OpalConnection &other)
                 thisSink->RequiresPatchThread(otherSource) && otherSource->RequiresPatchThread(thisSink));
 
     if (patch == NULL) {
-      PTRACE(3, "ModemConnection::UpdateMediaStreams: can't create patch for " << *otherSource);
+      PTRACE(0, "ModemConnection::UpdateMediaStreams: can't create patch for " << *otherSource);
       return false;
     }
 

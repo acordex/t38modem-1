@@ -360,18 +360,19 @@ PBoolean T38ModemMediaStream::WritePacket(RTP_DataFrame & packet)
     packedSequenceNumber -= 0x10000L;
   }
 
+  /* Acordex added to better handle missing end of carrier packet */
+  if (packet.GetPayloadSize() == 0) {
+    PTRACE(5, "T38ModemMediaStream::WritePacket: ignored fake packet " << packedSequenceNumber);
+  	return t38engine->HandleFakePacket();
+  }
+
   if (lost < 0) {
     PTRACE(lost == -1 ? 5 : 3,
         "T38ModemMediaStream::WritePacket: " << (packet.GetPayloadSize() == 0 ? "Fake" : "Repeated") <<
         " packet " << packedSequenceNumber << " (expected " << currentSequenceNumber << ")");
 
-    if (lost > -10)
+    if (lost > -10)  // If not wildly out of sync, ignore it, otherwise continue to adjust our expected packet number
       return TRUE;
-  }
-
-  if (packet.GetPayloadSize() == 0) {
-    PTRACE(5, "T38ModemMediaStream::WritePacket: ignored fake packet");
-    return TRUE;
   }
 
   PASN_OctetString ifp_packet((const char *)packet.GetPayloadPtr(), packet.GetPayloadSize());
@@ -386,6 +387,7 @@ PBoolean T38ModemMediaStream::WritePacket(RTP_DataFrame & packet)
   }
 
   if (lost != 0) {
+    if (lost != -1) PTRACE(0, "T38ModemMediaStream::WritePacket: lost " << lost << " adjusting sequence number from " << currentSequenceNumber << " to " << packedSequenceNumber);
     if (lost < 0 || lost > 10)
       lost = 1;
 

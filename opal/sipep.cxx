@@ -212,6 +212,7 @@ PString MySIPEndPoint::ArgSpec()
     "-sip-audio-list."
     "-sip-disable-t38-mode."
     "-sip-t38-udptl-redundancy:"
+    "-sip-t38-udptl-redundancy-interval:"
     "-sip-t38-udptl-keep-alive-interval:"
     "-sip-t38-max-buffer:"
     "-sip-t38-max-datagram:"
@@ -220,6 +221,7 @@ PString MySIPEndPoint::ArgSpec()
     "-sip-listen:"
     "-sip-retry-403-forbidden."
     "-sip-no-listen."
+    "-sip-inviters:"
   ;
 }
 
@@ -236,6 +238,8 @@ PStringArray MySIPEndPoint::Descriptions()
       "  --sip-t38-udptl-redundancy str\n"
       "                            : Use OPAL-T38-UDPTL-Redundancy=str route option by\n"
       "                              default.\n"
+      "  ---sip-t38-udptl-redundancy-interval ms\n"   // Acordex added
+      "                            : 50 ms by default\n"
       "  --sip-t38-udptl-keep-alive-interval ms\n"
       "                            : Use OPAL-T38-UDPTL-Keep-Alive-Interval=ms route\n"
       "                              option by default.\n"
@@ -259,6 +263,8 @@ PStringArray MySIPEndPoint::Descriptions()
       "  --sip-no-listen           : Disable listen for incoming calls.\n"
       "  --sip-retry-403-forbidden : Enable retrying on 403 Forbidden responses. This violates\n"
       "                              RFC 3261, but is needed by some SIP servers.\n"
+      "  --sip-inviters            : Comma separated list of valid IP Prefixes from which to accept SIP requests.\n" // Acordex added
+      "                              (e.g 192.168.1 or 192.168.1.5,192.168.90.3 or 192.168.)\n"
       "\n"
       "SIP route options:\n"
       "  OPAL-Enable-Audio=[!]wildcard[,[!]...]\n"
@@ -352,10 +358,19 @@ PBoolean MySIPEndPoint::Initialise(const PConfigArgs & args)
     defaultStringOptions.SetAt("Enable-Audio", s);
   }
 
+// CB attempt to offer T.38 in initial invite to correct problem with ACK containing T.38 even
+// when initial invite did not, does not seem to help
+//  defaultStringOptions.SetAt("AutoStart", "fax:sendrecv");
+
   if (args.HasOption("sip-disable-t38-mode"))
     defaultStringOptions.SetAt("Disable-T38-Mode", "true");
 
-  defaultStringOptions.SetAt("T38-UDPTL-Redundancy-Interval", "50");
+  // Acordex added to set interval
+  defaultStringOptions.SetAt("T38-UDPTL-Redundancy-Interval",
+                             args.HasOption("sip-t38-udptl-redundancy-interval")
+                             ? args.GetOptionString("sip-t38-udptl-redundancy-interval")
+                             : "50");
+                             
   defaultStringOptions.SetAt("T38-UDPTL-Optimise-On-Retransmit", "true");
 
   defaultStringOptions.SetAt("T38-UDPTL-Redundancy",
@@ -392,7 +407,11 @@ PBoolean MySIPEndPoint::Initialise(const PConfigArgs & args)
     else
       listeners = GetDefaultListeners();
 
-    if (!StartListeners(listeners)) {
+  // Acordex added to restrict inviter IPs
+   if (args.HasOption("sip-inviters"))
+    	MySIPEndPoint::ipList = args.GetOptionString("sip-inviters").Tokenise(",", FALSE);
+
+   if (!StartListeners(listeners)) {
       cerr << "Could not open any SIP listener from "
            << setfill(',') << listeners << endl;
       return FALSE;
@@ -614,13 +633,13 @@ bool MySIPConnection::SwitchFaxMediaStreams(bool enableFax)
     }
   }
 
-  PTRACE(3, "MySIPConnection::SwitchFaxMediaStreams: " << (res ? "OK" : "FAIL"));
+  PTRACE(res ? 1 : 0, "MySIPConnection::SwitchFaxMediaStreams: " << (res ? "OK" : "FAIL"));
   return res;
 }
 
 void MySIPConnection::OnSwitchedFaxMediaStreams(bool toT38, bool success)
 {
-  PTRACE(3, "MySIPConnection::OnSwitchedFaxMediaStreams: "
+  PTRACE((success ? 3 : 0), "MySIPConnection::OnSwitchedFaxMediaStreams: "
          << (success ? "succeeded" : "NOT ") << "switched to "
          << (toT38 ? "T.38" : "audio"));
 
@@ -723,6 +742,38 @@ void MySIPConnection::AdjustMediaFormats(
 
   PTRACE(4, "MySIPConnection::AdjustMediaFormats:\n" << setfill('\n') << mediaFormats << setfill(' '));
 }
+
+/* Acordex added below to allow for restriction of inviter IP addresses */
+PStringArray MySIPEndPoint::ipList;
+ 
+PBoolean MySIPEndPoint::NewIncomingConnection(OpalTransport * transport)
+{
+    
+    if (ipList.GetSize()) {
+		PIPSocket::Address ip;
+   		OpalTransportAddress recvAddr;
+    	
+    	recvAddr = transport->GetLastReceivedAddress();
+    	if (recvAddr.IsEmpty() || !recvAddr.GetIpAddress(ip) || !ip.IsValid()) {
+			PTRACE(0, "SIP\tIgnored incoming request due can't determine source IP");
+    		return(true);
+    		}
+   		PString recvAddrStr = ip.AsString(PTrue);
+		PINDEX i = 0;
+		for( ; i < ipList.GetSize() ; i++ ) {
+			if (recvAddrStr.Find(ipList[i]) == 0) {
+				PTRACE(2, "SIP\tAccept incoming SIP request from " << recvAddrStr);
+				break;
+				}
+			}
+		if (i >= ipList.GetSize()) {
+			PTRACE(0, "SIP\tIgnored incoming request from " << recvAddrStr << " (address not on list)");
+    		return(true);
+    		}
+    	}	
+    return SIPEndPoint::NewIncomingConnection(transport);
+}
+
 /////////////////////////////////////////////////////////////////////////////
 #endif // OPAL_SIP
 /////////////////////////////////////////////////////////////////////////////

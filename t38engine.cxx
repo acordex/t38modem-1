@@ -289,27 +289,27 @@
 #endif
 ///////////////////////////////////////////////////////////////
 enum StateOut {
-  stOutIdle,
-  stOutCedWait,
-  stOutSilenceWait,
-  stOutIndWait,
-  stOutData,
-  stOutHdlcFcs,
-  stOutDataNoSig,
-  stOutNoSig,
+  stOutIdle,       	// 0
+  stOutCedWait,		// 1
+  stOutSilenceWait, // 2
+  stOutIndWait,		// 3
+  stOutData,		// 4
+  stOutHdlcFcs,		// 5
+  stOutDataNoSig,	// 6
+  stOutNoSig,		// 7
 };
 ///////////////////////////////////////////////////////////////
 enum StateModem {
-  stmIdle,
+  stmIdle,     		// 0
 
-  stmOutMoreData,
-  stmOutNoMoreData,
+  stmOutMoreData,	// 1
+  stmOutNoMoreData, // 2
 
-  stmInWaitSilence,
+  stmInWaitSilence,	// 3
 
-  stmInWaitData,
-  stmInReadyData,
-  stmInRecvData,
+  stmInWaitData,	// 4
+  stmInReadyData,	// 5
+  stmInRecvData,	// 6
 };
 
 #define isStateModemOut() (stateModem >= stmOutMoreData && stateModem <= stmOutNoMoreData)
@@ -476,7 +476,7 @@ MODPARS::MODPARS(int _val, unsigned _ind, int _lenInd, unsigned _msgType, int _b
 }
 
 static const MODPARS mods[] = {
-MODPARS(   3, T38I(e_v21_preamble),              900, T38D(e_v21),         300 ),
+MODPARS(   3, T38I(e_v21_preamble),             1000, T38D(e_v21),         300 ),	// spec says duration is 1s +/- %15 = 850 - 1150ms Acordex CB 4/29/13 moved from 900 (original T38 to 1000 fax spec)
 MODPARS(  24, T38I(e_v27_2400_training),        1100, T38D(e_v27_2400),   2400 ),
 MODPARS(  48, T38I(e_v27_4800_training),         900, T38D(e_v27_4800),   4800 ),
 MODPARS(  72, T38I(e_v29_7200_training),         300, T38D(e_v29_7200),   7200 ),
@@ -485,7 +485,7 @@ MODPARS(  74, T38I(e_v17_7200_short_training),   300, T38D(e_v17_7200),   7200 )
 MODPARS(  96, T38I(e_v29_9600_training),         300, T38D(e_v29_9600),   9600 ),
 MODPARS(  97, T38I(e_v17_9600_long_training),   1500, T38D(e_v17_9600),   9600 ),
 MODPARS(  98, T38I(e_v17_9600_short_training),   300, T38D(e_v17_9600),   9600 ),
-MODPARS( 121, T38I(e_v17_12000_long_training),  1500, T38D(e_v17_12000), 12000 ),
+MODPARS( 121, T38I(e_v17_12000_long_training),  1400, T38D(e_v17_12000), 12000 ), // Acordex CB 4/29/13 shorted from 1500 to 1400 to match VOIP timing to see if it help FTT issues
 MODPARS( 122, T38I(e_v17_12000_short_training),  300, T38D(e_v17_12000), 12000 ),
 MODPARS( 145, T38I(e_v17_14400_long_training),  1500, T38D(e_v17_14400), 14400 ),
 MODPARS( 146, T38I(e_v17_14400_short_training),  300, T38D(e_v17_14400), 14400 ),
@@ -496,6 +496,7 @@ static const MODPARS invalidMods;
 enum GetModParsBy {
   by_val,
   by_ind,
+  by_msgType,  // Acordex added
 };
 
 static const MODPARS &GetModPars(int key, enum GetModParsBy by = by_val) {
@@ -507,6 +508,10 @@ static const MODPARS &GetModPars(int key, enum GetModParsBy by = by_val) {
         break;
       case by_ind:
         if( mods[i].ind == (unsigned)key )
+          return mods[i];
+        break;
+      case by_msgType:  // Acordex added
+        if( mods[i].msgType == (unsigned)key )
           return mods[i];
         break;
       default:
@@ -622,8 +627,12 @@ T38Engine::T38Engine(const PString &_name)
   , timeOutBufEmpty()
   , timeDelayEndOut()
   , timeBeginOut()
+  , timeCarrierEnd()  // Acordex
+  , timeSilenceEnd()  // Acordex
   , countOut(0)
   , moreFramesOut(FALSE)
+  , expectTraining(FALSE)   // Acordex
+//  , seen9600(FALSE)   // Acordex
   , hdlcOut()
   , callbackParamIn(cbpReset)
   , isCarrierIn(0)
@@ -631,12 +640,16 @@ T38Engine::T38Engine(const PString &_name)
   , timeBeginIn()
 #endif
   , countIn(0)
+  , termSeen(TRUE)  // Acordex
+  , hdlcData(TRUE)  // Acordex
   , t30()
   , modStreamIn(NULL)
   , modStreamInSaved(NULL)
   , stateModem(stmIdle)
 {
   PTRACE(2, name << " T38Engine");
+  fakeTimeout = 0;   // Acordex
+  trainingCt = 0;    // Acordex
 }
 
 T38Engine::~T38Engine()
@@ -648,6 +661,16 @@ T38Engine::~T38Engine()
 
   if (modStreamInSaved != NULL)
     delete modStreamInSaved;
+
+  /* Acordex following loggin was added */
+  if (IsOpenIn())
+    myPTRACE(1, name << " ~T38Engine isOpenIn");
+
+  if (IsOpenOut())
+    myPTRACE(1, name << " ~T38Engine isOpenOut");
+
+  if( !modemCallback.IsNULL() )
+    myPTRACE(1, name << " ~T38Engine !modemCallback.IsNULL()");
 }
 
 void T38Engine::OnOpenIn()
@@ -658,6 +681,7 @@ void T38Engine::OnOpenIn()
 void T38Engine::OnOpenOut()
 {
   EngineBase::OnOpenOut();
+  preparePacketDelay.Restart();  // Acordex added
 }
 
 void T38Engine::OnCloseIn()
@@ -725,12 +749,16 @@ void T38Engine::OnChangeEnableFakeOut()
 void T38Engine::OnAttach()
 {
   EngineBase::OnAttach();
+
+  OnResetModemState(); // Acordex added
 }
 
 void T38Engine::OnDetach()
 {
   EngineBase::OnDetach();
-  SignalOutDataReady();
+
+  OnResetModemState();
+  SignalOutDataReady(); // Acordex added
 }
 
 void T38Engine::OnChangeModemClass()
@@ -774,6 +802,7 @@ void T38Engine::SendOnIdle(DataType _dataType)
   PWaitAndSignal mutexWait(Mutex);
 
   onIdleOut = _dataType;
+  cngCount = 0;  // Acordex added
   SignalOutDataReady();
 }
 
@@ -813,6 +842,20 @@ PBoolean T38Engine::SendStart(DataType _dataType, int param)
       ModParsOut.dataTypeT38 = ModParsOut.dataType = _dataType;
       ModParsOut.ind = T38I(e_no_signal);
       ModParsOut.lenInd = param;
+// an idea to make a really short delay before train a 7200 to try and fix machine
+// sensitive to this, did not help
+	// if (expectTraining && seen9600) {
+    //  	param = 0;
+    //  	seen9600 = false;
+    // 	}
+      // Acordex added timeSilenceEnd value
+      // up 70 ms to 75 ms spec.  
+      if (param == 70 && delaySignalOut) param = 75;
+      if (PTime() > timeSilenceEnd) {
+      	timeSilenceEnd = PTime();
+//   	myPTRACE(1, name << " Time silence end < now " << (PTime() - timeSilenceEnd));
+	  }
+      timeSilenceEnd += param;
       break;
     case dtHdlc:
     case dtRaw:
@@ -822,6 +865,30 @@ PBoolean T38Engine::SendStart(DataType _dataType, int param)
           (ModParsOut.msgType == T38D(e_v21) || t30.hdlcOnly()) ? dtHdlc : dtRaw;
       if (!ModParsOut.IsModValid())
         return FALSE;
+        
+// Acordex No proof this helps
+/*	if (!expectTraining && ModParsOut.msgType != T38D(e_v21) && timeCarrierEnd + PTimeInterval(200) > PTime()) {
+  	 	myPTRACE(1, name << " SendStart xmit delay 200");
+    	delaySignalOut = TRUE;
+    	timeBeginOut = timeCarrierEnd + PTimeInterval(500);
+     	} */
+     	
+// see above, no help
+//    if (expectTraining && ModParsOut.msgType == T38D(e_v29_9600))
+//    	seen9600 = true;
+
+ // Acordex CB 10/22/10 - Delaying start of high speed output seems to help some fax machines that
+ // keep resulting in failure to train when there is no delay here, however several fax machines
+ // that want V29-9600 do not like the delay and will fail to train with it.
+ // one machine also fails if delay occurs before fax page, so this delay is restricted to training
+ 	 if (expectTraining && ModParsOut.msgType != T38D(e_v21) && ModParsOut.msgType != T38D(e_v29_9600) && ModParsOut.msgType != T38D(e_v29_7200)) {  // the delay seems to hurt the V.29 9600 case (and perhaps the V.29 7200 case)
+	 	myPTRACE(1, name << " SendStart sig delay 100");
+	 	expectTraining = false;
+     	delaySignalOut = TRUE;
+     	// Acordex CB 4/26/2013 - every other attempt delay time to fix training issues
+    	timeBeginOut = PTime() + PTimeInterval((trainingCt % 2) == 0 ? 200 : 100);    // 50 is to small, 100 works, 200 works
+    	++trainingCt;
+    	}
       break;
     default:
       return FALSE;
@@ -1135,7 +1202,7 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
     }
   }
 
-  //myPTRACE(1, name << " PreparePacket begin stM=" << stateModem << " stO=" << stateOut);
+  myPTRACE(1, name << " PreparePacket begin stM=" << stateModem << " stO=" << stateOut);
 
   ifp = T38_IFP();
   PBoolean doDalay = TRUE;
@@ -1152,8 +1219,8 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
     PBoolean redo = FALSE;
 
     if (doDalay) {
-      //PTRACE(1, name << " +++++ stM=" << stateModem << " stO=" << stateOut << " "
-      //       << timeDelayEndOut.AsString("hh:mm:ss.uuu\t", PTime::Local));
+      PTRACE(1, name << " +++++ stM=" << stateModem << " stO=" << stateOut << " onio=" << onIdleOut << " "
+             << timeDelayEndOut.AsString("hh:mm:ss.uuu\t", PTime::Local));
 
       for (;;) {
         PTimeInterval delay = timeDelayEndOut - PTime();
@@ -1209,7 +1276,27 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
 
                 delaySignalOut = FALSE;
               }
-
+ // Acordex CB 11/11/10 - inforce minimum line turn around time of 75ms from when other end finished transmitting
+ #define kMinTurnAround 75
+			  if (timeCarrierEnd + kMinTurnAround > PTime()) {
+			  	// silence case, make sure silence time begins from end of carrier, and that it is >= 75ms
+			  	 if (ModParsOut.dataType == dtSilence) {
+			  	 	if (timeCarrierEnd + ModParsOut.lenInd > timeSilenceEnd) {
+                 		 myPTRACE(4, name << " PreparePacket adjust silence end " << (timeCarrierEnd + ModParsOut.lenInd - timeSilenceEnd));
+			  	 		timeSilenceEnd = timeCarrierEnd + ModParsOut.lenInd;
+                   		}
+			  	 	if (timeCarrierEnd + kMinTurnAround > timeSilenceEnd) {
+                 		 myPTRACE(4, name << " PreparePacket min turn around " << (timeCarrierEnd + kMinTurnAround - timeSilenceEnd));
+			  	 		timeSilenceEnd = timeCarrierEnd + kMinTurnAround;
+			  	 		}
+			  	 	}
+			  	 // we are trying to send, hold off for 75ms
+			  	 else {
+                  	 redo = TRUE;
+                 	 myPTRACE(4, name << " PreparePacket delayOut from carrier");
+                 	 break;
+ 			  	 	}
+				}
               if (isCarrierIn) {
                 myPTRACE(3, name << " PreparePacket isCarrierIn=" << isCarrierIn
                                 << " for dataType=" << ModParsOut.dataType);
@@ -1240,7 +1327,7 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
                     redo = TRUE;
                     break;
                   } else {
-                    myPTRACE(1, name << " PreparePacket isCarrierIn expired");
+                    myPTRACE(0, name << " PreparePacket isCarrierIn expired");
                     isCarrierIn = 0;
                   }
                 }
@@ -1261,7 +1348,7 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
                   redo = TRUE;
                   break;
                 default:
-                  myPTRACE(1, name << " PreparePacket bad dataTypeT38=" << ModParsOut.dataTypeT38);
+                  myPTRACE(0, name << " Failed: PreparePacket bad dataTypeT38=" << ModParsOut.dataTypeT38);
                   return 0;
               }
               break;
@@ -1306,7 +1393,7 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
                   hdlcOut.PutRawData(&bufOut);
                   break;
                 default:
-                  myPTRACE(1, name << " PreparePacket bad dataType=" << ModParsOut.dataType);
+                  myPTRACE(0, name << " Failed: PreparePacket bad dataType=" << ModParsOut.dataType);
                   return 0;
               }
 
@@ -1316,22 +1403,23 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
                   break;
                 case dtRaw:
                   if (ModParsOut.dataType == dtHdlc) {
-                    myPTRACE(1, name << " PreparePacket sending dtHdlc like dtRaw not implemented");
+                    myPTRACE(0, name << " Failed: PreparePacket sending dtHdlc like dtRaw not implemented");
                     return 0;
                   }
                   hdlcOut.GetRawStart();
                   break;
                 default:
-                  myPTRACE(1, name << " PreparePacket bad dataTypeT38=" << ModParsOut.dataTypeT38);
+                  myPTRACE(0, name << " Failed: PreparePacket bad dataTypeT38=" << ModParsOut.dataTypeT38);
                   return 0;
               }
 
               redo = TRUE;
+              doDalay = FALSE; // Acordex added
               break;
             ////////////////////////////////////////////////////
             case stOutData:
               {
-                BYTE b[(msPerOut * 14400)/(8*1000)];
+                BYTE b[(msPerOut * 14400)/(8*1000)];   // 1.8 * 40ms = 72
                 PINDEX len = (msPerOut * ModParsOut.br)/(8*1000);
                 if (len > PINDEX(sizeof(b)))
                   len = sizeof(b);
@@ -1354,13 +1442,16 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
                         break;
                       case dtRaw:
                         stateOut = stOutDataNoSig;
+                        timeSilenceEnd = PTime();  // Acordex added
                         break;
                       default:
-                        myPTRACE(1, name << " PreparePacket stOutData bad dataTypeT38="
+                        myPTRACE(0, name << " Failed: PreparePacket stOutData bad dataTypeT38="
                             << ModParsOut.dataTypeT38);
                         return 0;
                     }
                     redo = TRUE;
+                    // Acordex CB 10/7/10 end of data should come out immediately
+              		doDalay = FALSE;
                     break;
                   case 0:
                     if (hdlcOut.getLastChar() != -1 &&
@@ -1399,7 +1490,7 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
                         t38data(ifp, ModParsOut.msgType, T38F(e_t4_non_ecm_data), PBYTEArray(b, count));
                         break;
                       default:
-                        myPTRACE(1, name << " PreparePacket stOutData bad dataTypeT38="
+                        myPTRACE(0, name << " Failed: PreparePacket stOutData bad dataTypeT38="
                             << ModParsOut.dataTypeT38);
                         return 0;
                     }
@@ -1412,10 +1503,12 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
               if (ModParsOut.msgType == T38D(e_v21)) {
                 t30.v21End(TRUE);
                 t30.v21Begin();
+                if (moreFramesOut) expectTraining = true;  // Acordex added training handling
               }
 
               if (ModParsOut.dataType == dtRaw) {
                 PBoolean wasFull = bufOut.isFull();
+				PBoolean fcsOK = hdlcOut.isFcsOK();
 
                 if (countOut)
                   t38data(ifp, ModParsOut.msgType, hdlcOut.isFcsOK() ? T38F(e_hdlc_fcs_OK) : T38F(e_hdlc_fcs_BAD));
@@ -1427,8 +1520,11 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
 
                 if (hdlcOut.GetData(NULL, 0) != -1)
                   stateOut = stOutData;
-                else
+                else {
                   stateOut = stOutDataNoSig;
+                  // Acordex added timing for silence end
+                  timeSilenceEnd = timeBeginOut + (PInt64(hdlcOut.getRawCount()) * 8 * 1000)/ModParsOut.br;
+				  }
 
                 if (wasFull && !bufOut.isFull()) {
                   ModemCallbackWithUnlock(cbpOutBufNoFull);
@@ -1438,7 +1534,7 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
                 }
               } else {
                 if( stateModem != stmOutNoMoreData ) {
-                  myPTRACE(1, name << " PreparePacket stOutHdlcFcs stateModem("
+                  myPTRACE(0, name << " Failed: PreparePacket stOutHdlcFcs stateModem("
                       << stateModem << ") != stmOutNoMoreData");
                   return 0;
                 }
@@ -1451,7 +1547,7 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
                 countOut = 0;
                 bufOut.Clean();		// reset eof
                 hdlcOut.PutHdlcData(&bufOut);
-                hdlcOut.GetHdlcStart(FALSE);
+                hdlcOut.GetHdlcStart(FALSE); // this adds 4 bytes to the raw cnt (2 crc, flags, zeroes)
                 if (moreFramesOut) {
                   stateOut = stOutData;
                   stateModem = stmOutMoreData;
@@ -1461,6 +1557,8 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
                     return 0;
                 } else {
                   stateOut = stOutDataNoSig;
+                  // Acordex added timing for silence end
+                  timeSilenceEnd = PTime() + (4 * 8 * 1000)/ModParsOut.br;
                 }
               }
               break;
@@ -1468,13 +1566,13 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
             case stOutDataNoSig:
 #if PTRACING
               if (myCanTrace(3) || (myCanTrace(2) && ModParsOut.dataType == dtRaw)) {
-                PInt64 msTime = (PTime() - timeBeginOut).GetMilliSeconds();
+                PInt64 msTime = (timeSilenceEnd - timeBeginOut).GetMilliSeconds();
                 myPTRACE(2, name << " Sent " << hdlcOut.getRawCount() << " bytes in " << msTime << " ms ("
                   << (PInt64(hdlcOut.getRawCount()) * 8 * 1000)/(msTime ? msTime : 1) << " bits/s)");
               }
 #endif
               if( stateModem != stmOutNoMoreData ) {
-                myPTRACE(1, name << " PreparePacket stOutDataNoSig stateModem("
+                myPTRACE(0, name << " Failed: PreparePacket stOutDataNoSig stateModem("
                      << stateModem << ") != stmOutNoMoreData");
                 return 0;
               }
@@ -1486,7 +1584,7 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
                   t38data(ifp, ModParsOut.msgType, T38F(e_t4_non_ecm_sig_end));
                   break;
                 default:
-                  myPTRACE(1, name << " PreparePacket stOutDataNoSig bad dataTypeT38="
+                  myPTRACE(0, name << " Failed: PreparePacket stOutDataNoSig bad dataTypeT38="
                       << ModParsOut.dataTypeT38);
                   return 0;
               }
@@ -1500,26 +1598,53 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
               break;
             ////////////////////////////////////////////////////
             case stOutNoSig:
-              t38indicator(ifp, T38I(e_no_signal));
+              // Acordex CB 10/8/10 CNG from very start so as not to temp other end to re-invite to audio
+   		      if (onIdleOut == dtCng && cngCount == 0) {
+   		       	 	t38indicator(ifp, T38I(e_cng));
+   		       	 	++cngCount;
+    		       }
+    		  else {
+              		t38indicator(ifp, T38I(e_no_signal));
+             	  }
               stateOut = stOutIdle;
+              // Acordex Added
+              // spec says 75 +/- 20 milliseconds between V.21 and High Speed(V.17, V.29) AND
+              // 75 milliseconds between High Speed and V.21. Hylafax seems to do this
+              // with AT_FTS=7 sequences, so this may be moot as a AT_FTS= effectively cancels this
+              // by setting delaySignalOut to false above. But if there is no  AT_FTS=, this will enforce
+              // a delay. This may be too much as it only needs to be enforced from 'stOutDataNoSig' time.
               delaySignalOut = TRUE;
-              timeBeginOut = PTime() + PTimeInterval(75);
+              timeBeginOut = timeSilenceEnd + PTimeInterval(75);
               break;
             default:
-              myPTRACE(1, name << " PreparePacket bad stateOut=" << stateOut);
+              myPTRACE(0, name << " Failed: PreparePacket bad stateOut=" << stateOut);
               return 0;
           }
         } else {
           switch (onIdleOut) {
             case dtCng:
+              /* Acordex added */
+			  myPTRACE(1, name << "send CNG");
+			  timeDelayEndOut = PTime() + (msPerOut);
+			  if (cngCount >= 14000 / msPerOut) {
+              		myPTRACE(1, "CNG count reset");
+			  		cngCount = 0;
+			  		}
+			  if (cngCount++ == 0) {
               t38indicator(ifp, T38I(e_cng));
+			  	return 1;
+			  	}
+			  return -1;
+              break;
+            case dtSilence:
+ 			/* Acordex added */
+              t38indicator(ifp, T38I(e_no_signal));
+			  onIdleOut = dtNone;
               break;
             default:
-              PTRACE(1, name << " SendOnIdle dataType(" << onIdleOut << ") is not supported");
-            case dtNone:
               waitData = TRUE;
+			  onIdleOut = dtNone;
           }
-          onIdleOut = dtNone;
         }
       }
 
@@ -1562,7 +1687,7 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
               << (PInt64(hdlcOut.getRawCount()) * 8 * 1000)/(msTime ? msTime : 1) << " bits/s)");
           }
 #endif
-          myPTRACE(1, name << " PreparePacket DTE's data delay, reset " << hdlcOut.getRawCount());
+          myPTRACE(0, name << " PreparePacket Underflow DTE's data delay, reset " << hdlcOut.getRawCount());
           hdlcOut.resetRawCount();
           timeBeginOut = PTime() - PTimeInterval(msPerOut);
           doDalay = FALSE;
@@ -1573,13 +1698,23 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
     switch (stateOut) {
       case stOutIdle:          timeDelayEndOut = PTime() + msPerOut; break;
       case stOutCedWait:       timeDelayEndOut = PTime() + ModParsOut.lenInd; break;
-      case stOutSilenceWait:   timeDelayEndOut = PTime() + ModParsOut.lenInd; break;
+ // Acordex added better silence end timing
+ //      case stOutSilenceWait:   timeDelayEndOut = PTime() + ModParsOut.lenInd; break;
+      case stOutSilenceWait:   timeDelayEndOut = timeSilenceEnd; break;
       case stOutIndWait:       timeDelayEndOut = PTime() + ModParsOut.lenInd; break;
       case stOutData:
+      // Acordex CB 10/27/10 removed '+ msPerOut' so delay will match data output
       case stOutHdlcFcs:
-        timeDelayEndOut = timeBeginOut + (PInt64(hdlcOut.getRawCount()) * 8 * 1000)/ModParsOut.br + msPerOut;
+        timeDelayEndOut = timeBeginOut + (PInt64(hdlcOut.getRawCount()) * 8 * 1000)/ModParsOut.br; //  + msPerOut;
         break;
+       // Acordex CB 10/27/10 - moved here so end_sig does not come out until last HDLC bytes are send (currently counting 4)
+       // in non-ecm-data case this delay is not seen because 'noDalay' set to true in that case
+       // -1 is because raw count seems to include leading flag (or zeros) which I am not sure should be part of the timing
+       // This is original code restored
       case stOutDataNoSig:     timeDelayEndOut = PTime() + msPerOut; break;
+ //     case stOutDataNoSig:	// This is what pertains to the comment
+ //       timeDelayEndOut = timeBeginOut + (PInt64(hdlcOut.getRawCount() - 1) * 8 * 1000)/ModParsOut.br;
+ //       break;
       case stOutNoSig:         timeDelayEndOut = PTime() + msPerOut; break;
       default:                 timeDelayEndOut = PTime();
     }
@@ -1590,6 +1725,39 @@ int T38Engine::PreparePacket(HOWNEROUT hOwner, T38_IFP & ifp)
 
   return 1;
 }
+///////////////////////////////////////////////////////////////
+// Acordex added function
+// Called once per second if and only if no packet received in second,
+// use this to error out more quickly if packet marking end of carrier is lost,
+// generate a psuedo end of carrier here
+PBoolean T38Engine::HandleFakePacket()
+{
+ 	PWaitAndSignal mutexWait(Mutex);
+    if (!isCarrierIn) return TRUE;
+    if (countIn == 0 && ++fakeTimeout < 3) return TRUE;
+	if (!IsOpenIn())
+        return FALSE;
+    isCarrierIn = 0;	
+  	myPTRACE(1, name << " HandleFakePacket Timeout stm " << stateModem);
+    if (modStreamInSaved != NULL) {
+        myPTRACE(1, name << " HandleFakePacket modStreamInSaved != NULL, clean");
+        delete modStreamInSaved;
+        modStreamInSaved = NULL;
+      	}
+  	if (modStreamIn != NULL && modStreamIn->lastBuf != NULL) {
+        myPTRACE(1, name << " HandleFakePacket modStreamIn->lastBuf != NULL");
+        modStreamIn->PutEof(diagOutOfOrder);
+        modStreamIn->PushBuf();
+        if (stateModem == stmInRecvData)
+            ModemCallbackWithUnlock(callbackParamIn);
+		}
+    if (stateModem == stmInWaitSilence) {
+        stateModem = stmIdle;
+        ModemCallbackWithUnlock(callbackParamIn);
+        }
+    return TRUE;
+}
+
 ///////////////////////////////////////////////////////////////
 PBoolean T38Engine::HandlePacketLost(HOWNERIN hOwner, unsigned myPTRACE_PARAM(nLost))
 {
@@ -1612,11 +1780,68 @@ PBoolean T38Engine::HandlePacketLost(HOWNERIN hOwner, unsigned myPTRACE_PARAM(nL
   if( !(modStream == NULL || modStream->lastBuf == NULL) ) {
     // LXK Fix: Add check for hdlc so lost high speed hdlc data packets handled as well as v.21
     if(( modStream->ModPars.msgType == T38D(e_v21)) || (modStream->ModPars.dataType == dtHdlc)) {
+      if (modStream->ModPars.dataType == dtHdlc) 
+      		PTRACE(0, name << " HandlePacketLost in ECM data");
       modStream->SetDiag(diagBadFcs);
     }
   }
   return TRUE;
 }
+
+/* Acordex added function - original code in two places combined to this function */
+void T38Engine::StartInputDataStream(ModStream *newStream, HOWNERIN hOwner)
+{
+	  isCarrierIn = 1;
+	  fakeTimeout = 0;
+	  termSeen = FALSE;
+	  hdlcData = FALSE;
+	  if (onIdleOut == dtCng) {
+		onIdleOut = dtSilence;
+//		timeRecvSt = PTime();
+		}
+	 // if we are transmitting data or silence we want to ignore any incoming data, as this cannot
+	 // possibly be the response to what we sent, and must be a previous response that was sent late or
+	 // a repeat of a response, either way our transmission will generate yet another response and this
+	 // is the one we want, so do not begin saving incoming data
+	 if (isStateModemOut()) {
+		myPTRACE(2, name << "  T38Engine::StartInputDataStream ignore data start during transmission");
+		return;
+		}
+     modStreamInSaved = newStream;
+     modStreamInSaved->PushBuf();
+     countIn = 0;
+
+	  if (stateModem == stmInWaitSilence) {
+		stateModem = stmIdle;
+		ModemCallbackWithUnlock(callbackParamIn);
+        if (hOwnerIn != hOwner || !IsModemOpen())
+            return FALSE;
+	  }
+      else if (stateModem == stmInWaitData) {
+		if (modStreamIn != NULL) {
+		  if (modStreamIn->ModPars.IsEqual(modStreamInSaved->ModPars)) {
+			modStreamIn->Move(*modStreamInSaved);
+			delete modStreamInSaved;
+			modStreamInSaved = NULL;
+		  } else {
+			myPTRACE(2, name << "  T38Engine::StartInputDataStream modStreamIn->ModPars("
+			  << modStreamIn->ModPars.val
+			  << ") != modStreamInSaved->ModPars("
+			  << modStreamInSaved->ModPars.val
+			  << ")");
+			modStreamIn->PushBuf();
+			modStreamIn->PutEof(diagDiffSig);
+		  }
+		} else {
+		  myPTRACE(1, name << " StartInputDataStream modStreamIn == NULL");
+		}
+		stateModem = stmInReadyData;
+		ModemCallbackWithUnlock(callbackParamIn);
+		if (hOwnerIn != hOwner || !IsModemOpen())
+		  return FALSE;
+      }
+}
+
 ///////////////////////////////////////////////////////////////
 PBoolean T38Engine::HandlePacket(HOWNERIN hOwner, const T38_IFP & ifp)
 {
@@ -1653,12 +1878,26 @@ PBoolean T38Engine::HandlePacket(HOWNERIN hOwner, const T38_IFP & ifp)
 
       if (modStreamIn != NULL && modStreamIn->lastBuf != NULL) {
         myPTRACE(1, name << " HandlePacket indicator && modStreamIn->lastBuf != NULL");
-
-        if (firstIn && countIn == 0 && type_of_msg == T38I(e_no_signal)) {
-          myPTRACE(1, name << " HandlePacket ignored first indicator " << type_of_msg);
+		// Acordex added
+		// it is possible to see the sequence - v21preamble - nosig (or ced at start) - v21preamble - data ... 
+		// and we do not want to generate and error in this case, just ignore the extra no-sig. I think this
+		// is generated by T38 spoofing that generates an early v21preamble when it does not need too.
+        if (/* firstIn && */ countIn == 0 && (type_of_msg == T38I(e_no_signal) || type_of_msg == T38I(e_ced))) {
+          fakeTimeout = 1; // accelerate timeout to 2 seconds
+          myPTRACE(1, name << " HandlePacket no sig after sig with no data ignored " << type_of_msg);
           break;
         } else {
-          modStreamIn->PutEof(diagOutOfOrder | diagNoCarrier);
+			if (termSeen) { // Acordex added, just a missing end_sig - attempt to recover - treat as end-sig
+				myPTRACE(0, name << " HandlePacket detected " << type_of_msg << " after received term recovery " << countIn);
+				if (modStreamIn->ModPars.msgType != T38D(e_v21)) // in V.21 no 'no carrier' status to allow for re-listen
+					modStreamIn->PutEof(diagNoCarrier);
+				termSeen = FALSE;
+				}
+        	else { // Acordex added, some data received and signal lost - treat as error
+         		myPTRACE(0, name << " HandlePacket detected " << type_of_msg << "  after received cnt=" << countIn);
+          		modStreamIn->PutEof(diagOutOfOrder);
+          		modStreamIn->PushBuf();
+          		}
           myPTRACE(1, name << " HandlePacket out of order " << type_of_msg);
 
           if (stateModem == stmInRecvData) {
@@ -1678,6 +1917,7 @@ PBoolean T38Engine::HandlePacket(HOWNERIN hOwner, const T38_IFP & ifp)
 
       switch (type_of_msg) {
         case T38I(e_no_signal):
+          if (isCarrierIn) timeCarrierEnd = PTime();  // Acordex added tracking of carrier end
           isCarrierIn = 0;
 
           if (stateModem == stmInWaitSilence) {
@@ -1691,6 +1931,8 @@ PBoolean T38Engine::HandlePacket(HOWNERIN hOwner, const T38_IFP & ifp)
         case T38I(e_ced):
           OnUserInput('a');
           isCarrierIn = 0;
+    // Acordex added but not used
+	//	  if (onIdleOut == dtCng) onIdleOut = dtSilence;
 
           if (stateModem == stmInWaitSilence) {
             stateModem = stmIdle;
@@ -1725,7 +1967,8 @@ PBoolean T38Engine::HandlePacket(HOWNERIN hOwner, const T38_IFP & ifp)
         case T38I(e_v17_12000_long_training):
         case T38I(e_v17_14400_short_training):
         case T38I(e_v17_14400_long_training):
-          isCarrierIn = 1;
+          StartInputDataStream(new ModStream(GetModPars(type_of_msg, by_ind)), hOwner);
+/*          isCarrierIn = 1;
           modStreamInSaved = new ModStream(GetModPars(type_of_msg, by_ind));
           modStreamInSaved->PushBuf();
           countIn = 0;
@@ -1761,7 +2004,7 @@ PBoolean T38Engine::HandlePacket(HOWNERIN hOwner, const T38_IFP & ifp)
 
             if (hOwnerIn != hOwner || !IsModemOpen())
               return FALSE;
-          }
+          } */
           break;
         default:
           myPTRACE(1, name << " HandlePacket type_of_msg is bad !!! " << setprecision(2) << ifp);
@@ -1772,9 +2015,26 @@ PBoolean T38Engine::HandlePacket(HOWNERIN hOwner, const T38_IFP & ifp)
         unsigned type_of_msg = (T38_Type_of_msg_data)ifp.m_type_of_msg;
         ModStream *modStream = modStreamIn;
 
-        if (modStream == NULL || modStream->lastBuf == NULL)
-          modStream = modStreamInSaved;
-
+		if (onIdleOut == dtCng) onIdleOut = dtSilence; // Acordex added
+		// Acordex CB 10/21/10 - If we have missed initial preamble/training - just assume we did and start saving message,
+		// modem logic will determine if we missed more info
+        if (modStream == NULL || modStream->lastBuf == NULL) {
+		  	modStream = modStreamInSaved;
+		  	if (modStream == NULL) {
+		  		// ignore an 'hdlc_sig_end' which may come in after we have received a e_hdlc_fcs_OK/BAD, do
+		  		// not start a new receive event, this is just the end of an older event
+		  		if (!ifp.HasOptionalField(T38_IFPPacket::e_data_field) || !ifp.m_data_field.GetSize()) break;
+		  		const T38_DATA_FIELD &Data_Field = ifp.m_data_field[0];
+		  		if (Data_Field.m_field_type == T38F(e_hdlc_sig_end))
+		  			break;
+		  		// we start new input strean
+         		PTRACE(1, name << " HandlePacket missed initial preamble for " << type_of_msg << " stm " << stateModem);
+		  		StartInputDataStream(new ModStream(GetModPars(type_of_msg, by_msgType)), hOwner);
+		  		modStream = modStreamIn;
+        		if (modStream == NULL || modStream->lastBuf == NULL)
+		  			modStream = modStreamInSaved;		  		
+		  		}
+			}
         if (modStream == NULL || modStream->lastBuf == NULL) {
           PTRACE(1, name << " HandlePacket lastBuf == NULL");
           modStream = NULL;
@@ -1783,7 +2043,7 @@ PBoolean T38Engine::HandlePacket(HOWNERIN hOwner, const T38_IFP & ifp)
         if (modStream->ModPars.msgType != type_of_msg) {
           myPTRACE(1, name << " HandlePacket modStream->ModPars.msgType("
               << modStream->ModPars.msgType << ") != type_of_msg(" << type_of_msg << ")");
-          modStream->PutEof(diagOutOfOrder | diagNoCarrier);
+          modStream->PutEof(diagOutOfOrder);
           modStream = NULL;
         }
 
@@ -1796,7 +2056,9 @@ PBoolean T38Engine::HandlePacket(HOWNERIN hOwner, const T38_IFP & ifp)
 
                 switch (Data_Field.m_field_type) {  // Handle data
                   case T38F(e_hdlc_data):
+                  	   hdlcData = TRUE;  // tracking of hdlcData Acordex added
                   case T38F(e_t4_non_ecm_data):
+                  	   termSeen = FALSE; // tracking of terminator seen Acordex added
                   case T38F(e_hdlc_sig_end):
                   case T38F(e_hdlc_fcs_OK):
                   case T38F(e_hdlc_fcs_BAD):
@@ -1829,6 +2091,7 @@ PBoolean T38Engine::HandlePacket(HOWNERIN hOwner, const T38_IFP & ifp)
                     if(modStream != NULL) {
                       modStream->PutEof();
                       modStream->PushBuf();
+                      termSeen = TRUE;  // tracking of terminator seen Acordex added
                     }
                     break;
                 }
@@ -1846,9 +2109,13 @@ PBoolean T38Engine::HandlePacket(HOWNERIN hOwner, const T38_IFP & ifp)
                   case T38F(e_hdlc_sig_end):
                     if(modStream != NULL) {
                       modStream->PutEof(diagNoCarrier);
+                      termSeen = FALSE; // tracking of terminator seen Acordex added
+                      hdlcData = FALSE; // tracking of hdlcData Acordex added
                       modStream = NULL;
                     }
 
+                  // not used currently, idea to make turn around time larger
+    			  	timeCarrierEnd = PTime();
                     isCarrierIn = 0;
 
                     if (stateModem == stmInWaitSilence) {

@@ -120,6 +120,7 @@ PString MyManager::ArgSpec()
     "-route:"
     "u-username:"
     "-displayname:"
+    "-exip:"  // Acordex added to specify external IP without STUN server
     "-stun:"
     "-fake-audio:"
   ;
@@ -147,6 +148,7 @@ PStringArray MyManager::Descriptions()
       "  --displayname str         : Set the default display name to str.\n"
       "                              Can be overridden by route option\n"
       "                                OPAL-" OPAL_OPT_CALLING_DISPLAY_NAME "=str\n"
+	  "  --exip str				   : Set external IP of server instead of using STUN server\n"
       "  --stun server             : Set STUN server.\n"
       "  --fake-audio [!]wildcard[,[!]...]\n"
       "                            : Register the fake audio format(s) matching the\n"
@@ -237,19 +239,28 @@ PBoolean MyManager::Initialise(const PConfigArgs & args)
       }
     }
     PTRACE(1, "UDP ports: " << GetUDPPortBase() << "-" << GetUDPPortMax());
-    PTRACE(1, "RTP ports: " << GetRtpIpPortBase() << "-" << GetRtpIpPortMax());
+ //   PTRACE(1, "RTP ports: " << GetRtpIpPortBase() << "-" << GetRtpIpPortMax());
     PTRACE(1, "TCP ports: " << GetTCPPortBase() << "-" << GetTCPPortMax());
   }
+  PTRACE(1, "RTP ports: " << GetRtpIpPortBase() << "-" << GetRtpIpPortMax());
 
   SetDefaultUserName(
     args.HasOption("username") ?
       args.GetOptionString("username") :
       PProcess::Current().GetName() + " v" + PProcess::Current().GetVersion()
   );
+  /* Acordex added default to imaging */
+  SetDefaultDisplayName(
+    args.HasOption("displayname") ?
+      args.GetOptionString("displayname") :
+      "Imaging"
+  );
 
-  if (args.HasOption("displayname"))
-    SetDefaultDisplayName(args.GetOptionString("displayname"));
-
+   /* Acordex added - hard wire the external IP addres without stun server */
+  if (args.HasOption("exip")) {
+    	PIPSocket::Address externalAddress(args.GetOptionString("exip"));
+		SetTranslationAddress(externalAddress);
+  }
   if (args.HasOption("stun"))
     SetSTUNServer(args.GetOptionString("stun"));
 

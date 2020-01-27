@@ -213,7 +213,7 @@ class T38Engine : public EngineBase
 
   public:
 
-    enum { msPerOut = 30 };
+    enum { msPerOut = 40 };  // Acordex changed 30 => 40
 
   /**@name Construction */
   //@{
@@ -272,6 +272,12 @@ class T38Engine : public EngineBase
       HOWNERIN hOwner,
       unsigned nLost
     );
+
+    /**Handle fax T.38 packets once per second
+
+       If returns FALSE, then the reading loop should be terminated.
+      */
+	PBoolean HandleFakePacket();  // Acordex added
   //@}
 
   protected:
@@ -292,6 +298,7 @@ class T38Engine : public EngineBase
     PBoolean WaitOutDataReady(const PTimeInterval & timeout) {
       return outDataReadySyncPoint.Wait(timeout);
     }
+	void StartInputDataStream(ModStream *newStream, HOWNERIN hOwner);
 
   private:
     DataStream bufOut;
@@ -310,16 +317,26 @@ class T38Engine : public EngineBase
     PTime timeOutBufEmpty;
     PTime timeDelayEndOut;
     PTime timeBeginOut;
+    PTime timeCarrierEnd;
+    PTime timeSilenceEnd;
     PINDEX countOut;
     PBoolean moreFramesOut;
-    HDLC hdlcOut;
+    PBoolean expectTraining;     // expect high speed training next, used to add a delay needed by some fax machines
+ //   PBoolean seen9600;     		 // seen training at 9600
+	HDLC hdlcOut;
 
+	int cngCount;
+	int fakeTimeout;
+	int trainingCt;				// number of training attempts seen
+	
     int callbackParamIn;
     volatile int isCarrierIn;
 #if PTRACING
     PTime timeBeginIn;
 #endif
     PINDEX countIn;
+	PBoolean termSeen;
+	PBoolean hdlcData;
 
     T30 t30;
 

@@ -405,7 +405,7 @@
 ///////////////////////////////////////////////////////////////
 #include "g711.c"
 ///////////////////////////////////////////////////////////////
-static const char Manufacturer[] = "Vyacheslav Frolov";
+static const char Manufacturer[] = "Acordex Imaging";
 static const char Model[] = "T38FAX";
 #define _TOSTR(s) #s
 #define TOSTR(s) _TOSTR(s)
@@ -966,6 +966,8 @@ class ModemEngineBody : public PObject
     PBoolean off_hook;
 
     int lockReleasingState;
+	// Acordex CB 4/6/11 -- add ability to set switch to T38 delay time with comma's in dial string
+	unsigned int T38SwitchDelay;
 
     enum CallDirection {
       cdUndefined,
@@ -1082,6 +1084,8 @@ class ModemEngineBody : public PObject
     DeclareStringParam(SrcNum)
     DeclareStringParam(SrcName)
     DeclareStringParam(DstNum)
+    // Acordex added for logging and reporting dial failures reasons
+	DeclareStringParam(DialResult)
 
     DeclareResultCode(RC_PREF,            "", "\r\n")
 
@@ -1095,6 +1099,7 @@ class ModemEngineBody : public PObject
     DeclareResultCode(RC_BUSY,         "7\r", "BUSY\r\n")
     DeclareResultCode(RC_NO_ANSWER,    "8\r", "NO ANSWER\r\n")
     DeclareResultCode(RC_RINGING,      "9\r", "RINGING\r\n")
+    DeclareResultCode(RC_DISCONNECTED, "10\r", "T38: Number out of service\r\n")  // Acordex added
     DeclareResultCode(RC_FCERROR,    "+F4\r", "+FCERROR\r\n")
 };
 ///////////////////////////////////////////////////////////////
@@ -1267,6 +1272,7 @@ ModemEngineBody::ModemEngineBody(ModemEngine &_parent, const PNotifier &_callbac
     connectionEstablished(FALSE),
     off_hook(FALSE),
     lockReleasingState(0),
+    T38SwitchDelay(0),   // Acordex added
     callDirection(cdUndefined),
     callState(cstCleared),
     state(stCommand),
@@ -1379,7 +1385,7 @@ void ModemEngineBody::_ClearCall()
 
 PBoolean ModemEngineBody::Request(PStringToString &request)
 {
-  myPTRACE(3, "ModemEngineBody::Request: " << state << " request={\n" << request << "}");
+  myPTRACE(3, "ModemEngineBody::Request: " << state << " callState " << callState << " request={\n" << request << "}");
 
   PString command = request("command");
 
@@ -1422,6 +1428,11 @@ PBoolean ModemEngineBody::Request(PStringToString &request)
     else
     if (CallToken().IsEmpty() || CallToken() == request("calltoken")) {
       SetCallState(cstAlerted);
+
+	  // Acordex was in old code, but new code has this on connection establisted, so perhaps
+	  // this is too early, left commented out for now 1/21/20
+	  //if (callDirection == cdOutgoing && P.ModemClassId() == EngineBase::mcFax)
+      //   SendOnIdle(EngineBase::dtCng);
 
       if (state == stConnectWait && !pPlayTone && P.ModemClassId() == EngineBase::mcAudio) {
         SetState(stConnectHandle, chConnected);
@@ -1484,7 +1495,8 @@ PBoolean ModemEngineBody::Request(PStringToString &request)
     else
     if (CallToken().IsEmpty() || CallToken() == request("calltoken")) {
       CallToken("");
-
+	  DialResult(""); // Acordex Added
+	  
       if (callState == cstDialing && state == stConnectWait && request("trynextcommand") == "dial") {
         SetCallState(cstCleared);
         SetState(stDial);
@@ -1494,6 +1506,7 @@ PBoolean ModemEngineBody::Request(PStringToString &request)
         params.RemoveAt("trynextcommand");
         parent.SignalDataReady();
       } else {
+      	DialResult(request("dialresult")); // Acordex Added report dial failure reason
         _ClearCall();
       }
 
@@ -1520,7 +1533,7 @@ EngineBase *ModemEngineBody::NewPtrEngine(ModemClassEngine mce)
   if (activeEngines[mce]) {
     activeEngines[mce]->AddReference();
 
-    myPTRACE(1, "ModemEngineBody::NewPtrEngine created pointer for engine " << mce);
+    myPTRACE(0, "ModemEngineBody::NewPtrEngine created pointer for engine " << mce);
   }
 
   return activeEngines[mce];
@@ -1541,13 +1554,13 @@ void ModemEngineBody::_AttachEngine(ModemClassEngine mce)
         engine = new AudioEngine(parent.ptyName());
         break;
       default:
-        myPTRACE(1, parent.ptyName() << " ModemEngineBody::_AttachEngine Invalid mce " << mce);
+        myPTRACE(0, parent.ptyName() << " ModemEngineBody::_AttachEngine Invalid mce " << mce);
         return;
     }
 
     if (engine->TryLockModemCallback()) {
       if (!engine->Attach(engineCallback)) {
-        myPTRACE(1, parent.ptyName() << " ModemEngineBody::_AttachEngine Can't attach engineCallback to " << mce);
+        myPTRACE(0, parent.ptyName() << " ModemEngineBody::_AttachEngine Can't attach engineCallback to " << mce);
         engine->UnlockModemCallback();
         ReferenceObject::DelPointer(engine);
         return;
@@ -1555,13 +1568,16 @@ void ModemEngineBody::_AttachEngine(ModemClassEngine mce)
       engine->UnlockModemCallback();
       activeEngines[mce] = engine;
     } else {
-      myPTRACE(1, parent.ptyName() << " ModemEngineBody::_AttachEngine Can't lock ModemCallback for " << mce);
+      myPTRACE(0, parent.ptyName() << " ModemEngineBody::_AttachEngine Can't lock ModemCallback for " << mce);
       ReferenceObject::DelPointer(engine);
       return;
     }
   }
 
   activeEngines[mce]->ChangeModemClass(P.ModemClassId());
+  // Acordex added 1/23/20 from old code
+  if (callDirection == cdOutgoing)
+    sendOnIdle = EngineBase::dtCng;
   activeEngines[mce]->SendOnIdle(sendOnIdle);
 
   switch (mce) {
@@ -2289,6 +2305,8 @@ void ModemEngineBody::HandleCmdRest(PString &resp)
             PBoolean local = FALSE;
             PBoolean setForceFaxMode = FALSE;
             CallDirection setCallDirection = cdOutgoing;
+            // Acordex CB 4/6/11 -- add ability to set switch to T38 delay time with comma's in dial string
+			T38SwitchDelay = 0;
 
             if (!CallToken().IsEmpty()) {
               addNumTone = TRUE;
@@ -2361,6 +2379,7 @@ void ModemEngineBody::HandleCmdRest(PString &resp)
                   }
                   break;
                 case ',':
+                  T38SwitchDelay += unsigned(P.DialTimeComma()) * 1000;  // Acordex added
                   if (!addNumTone)
                     continue;
                   break;
@@ -2471,6 +2490,8 @@ void ModemEngineBody::HandleCmdRest(PString &resp)
 
               params.RemoveAll();
               params.SetAt("number", num);
+              // Acordex added 1/23/20 set destination number
+              DstNum(num);
               params.SetAt("localpartyname", LocalPartyName);
 
               parent.SignalDataReady();  // try to Dial w/o delay
@@ -3972,8 +3993,21 @@ void ModemEngineBody::CheckState(PBYTEArray & bresp)
           break;
         }
       case stConnectWait:
-        resp = RC_NO_CARRIER();
+        {
+        // Acordex added better reporting of failure reason
+        const char *failMsg = NULL;
+      	if (connectionEstablished) {
+        	resp = RC_NO_CARRIER();
+        	failMsg = (const char *)"Timeout after answer, no carrier";
+        	}
+        else {
+        	resp = RC_NO_ANSWER();
+        	failMsg = (const char *)"Timeout during ringing, no answer";
+        	}
+        // below is never true as clearCall has already set to cdUndefined
+      	myPTRACE(0, "Outbound Call To " << DstNum() << " callState " << callState << " Ended by " << failMsg);
         OnHook();
+        }
         break;
       default:
         break;
@@ -4042,9 +4076,31 @@ void ModemEngineBody::CheckState(PBYTEArray & bresp)
       case stConnectHandle:
       case stReqModeAckWait:
       case stReqModeAckHandle:
-        if (callDirection == cdOutgoing)
-          resp = RC_BUSY();
-        else
+        if (callDirection == cdOutgoing) {
+			// Acordex added call failure reason reporting
+			// below is never true as clearCall has already set to cdUndefined
+			PTRACE(0, "Outbound Call To " << DstNum() << " Ended by " << DialResult());
+			if (DialResult() == "Call cleared because the line is out of service" ||
+			// Seen this from SIP 404 error - number out of service
+				DialResult() == "Call failed as could not find user" || 
+			 // seen this with 'out of service, number changed, or seen this message with extra digits in phone #
+				DialResult() == "Remote system failed temporarily")
+				resp = RC_DISCONNECTED();
+			else if (DialResult() == "Remote party busy" || 
+				// This is generated by SIP '408 Request Timeout' which VOIPInnovations says can happen if relaying busy back
+				// through multiple providers takes too long
+				 DialResult() == "Remote switch congested")
+				 resp = RC_BUSY();
+			else if (DialResult() == "Remote party did not answer in required time")
+				 resp = RC_NO_ANSWER();
+			else if (DialResult() == "Call cleared due to missing dial tone")
+				 resp = RC_NO_DIALTONE();
+			// we hung up or they hung up - no carrier
+			else if (DialResult() == "Remote party cleared call" || DialResult() == "Local party cleared call")
+				 resp = RC_NO_CARRIER();
+			else
+				 resp = RC_ERROR();
+		} else
           resp = RC_ERROR();
 
         timeout.Stop();
@@ -4182,6 +4238,7 @@ void ModemEngineBody::CheckState(PBYTEArray & bresp)
             }
             else
             if (activeEngines[mceT38]) {
+              PTRACE(1, "CheckState: Already have t38engine");
               SetState(stReqModeAckHandle);
               timeout.Stop();
               parent.SignalDataReady();
@@ -4194,6 +4251,12 @@ void ModemEngineBody::CheckState(PBYTEArray & bresp)
 
               request.SetAt("modemtoken", parent.modemToken());
               request.SetAt("command", "requestmode");
+              if (forceFaxMode) {	// Acordex added to set delay
+              	if (callDirection == cdOutgoing) {
+               		PString delayTime = PString(T38SwitchDelay);
+              		request.SetAt("delay", delayTime);
+              		}
+              	}
               request.SetAt("calltoken", CallToken());
               request.SetAt("mode", forceFaxMode ? "fax" : "fax-no-force");
 

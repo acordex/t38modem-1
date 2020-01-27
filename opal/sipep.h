@@ -68,6 +68,8 @@ class MySIPEndPoint : public SIPEndPoint
       {}
   //@}
 
+	// Acordex added allowable SIP inviter IPs
+	static PStringArray ipList;
     static PString ArgSpec();
     static PStringArray Descriptions();
     static PStringArray Descriptions(const PConfigArgs & args);
@@ -84,6 +86,10 @@ class MySIPEndPoint : public SIPEndPoint
       SIP_PDU * invite,                        ///<  Original INVITE pdu
       unsigned int options = 0,                ///<  connection options
       OpalConnection::StringOptions * stringOptions = NULL ///<  complex string options
+    );
+	// Acordex added to check incoming SIP Inviter IPs
+    virtual PBoolean NewIncomingConnection(
+      OpalTransport * transport  ///<  Transport connection came in on
     );
 
     static PStringToString defaultStringOptions;

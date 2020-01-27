@@ -121,7 +121,7 @@ class T38Modem : public PProcess
 PCREATE_PROCESS(T38Modem);
 ///////////////////////////////////////////////////////////////
 T38Modem::T38Modem()
-  : PProcess("Frolov,Holtschneider,Davidson", "T38Modem",
+  : PProcess("Acordex Imaging", "T38Modem",
              MAJOR_VERSION, MINOR_VERSION, BUILD_TYPE, BUILD_NUMBER)
 {
 }
@@ -276,6 +276,9 @@ PBoolean T38Modem::Initialise()
     }
   }
 #endif
+	/* Acordex to increase capability */
+  int result = SetMaxHandles(4096);
+  PTRACE(0, "SetMaxHandles: " << result);
 
 #ifdef USE_OPAL
   manager = new MyManager();

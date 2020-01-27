@@ -50,8 +50,8 @@ PString GetPartyName(const PString & party)
 
   if (beg != P_MAX_INDEX)
     beg++;
-
-  PINDEX end = party.Find('@');
+  /* Acordex changed to get just the party name */
+  PINDEX end = party(beg,P_MAX_INDEX).Find('@');
 
   if (end != P_MAX_INDEX)
     end--;

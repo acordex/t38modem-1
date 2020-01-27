@@ -477,6 +477,7 @@ PBoolean PseudoModemPty::OpenPty()
 {
   if (IsOpenPty()) {
     // check hPty health
+    myPTRACE(3, "PseudoModemPty::OpenPty was open");
 
     pollfd pollfd;
 
@@ -489,9 +490,12 @@ PBoolean PseudoModemPty::OpenPty()
       char cbuf[1];
       int len;
 
+	  myPTRACE(3, "PseudoModemPty::OpenPty have event");
+
       len = ::read(hPty, cbuf, 1);
 
-      if (len < 0) {
+	  /* Acordex - trigger error on == 0 as well */
+      if (len <= 0) {
         // hPty is ill (slave tty was closed and still was not opened)
         int err = errno;
         // close hPty ASAP
