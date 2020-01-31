@@ -1352,6 +1352,8 @@ void ModemEngineBody::_ClearCall()
     if (off_hook) {
       timerBusy.Start(1000);
 
+      if (activeEngines[mceT38])
+      	_DetachEngine(mceT38);
       if (!activeEngines[mceAudio])
         _AttachEngine(mceAudio);
 

@@ -60,7 +60,7 @@ class MyManager : public OpalManager
   public:
     MyManager();
 
-    static PString ArgSpec();
+    static const PString ArgSpec();
     static PStringArray Descriptions();
     static PStringArray Descriptions(const PConfigArgs & args);
     PBoolean Initialise(const PConfigArgs & args);

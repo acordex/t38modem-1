@@ -106,7 +106,7 @@ MyManager::MyManager()
   //autoStartTransmitFax = TRUE;
 }
 
-PString MyManager::ArgSpec()
+PString const MyManager::ArgSpec()
 {
   return
 #if OPAL_H323
