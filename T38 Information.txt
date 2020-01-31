@@ -1,0 +1,164 @@
+T38 Information
+
+Overview
+
+The T38 program sends and receives faxes of the internet using UDP protocol on port 5060. To receive
+faxes the port must be routed to the server sending faxes. The T38 program emulates modems to the
+Hylafax program. In requires at least Mac OS 10.5 and an intel processor. It requires Hylafax 6 as well.
+
+It consists of three files:
+
+/usr/local/sbin/t38modem:
+Actual T38 program this should be running all the time the system is up to enable fax sending/receiving
+
+/usr/local/sbin/t38modemscript
+A shell script that determines the number of Hylafax send and receive lines, and reads the file '/var/spool/hylafax/etc/config.ttys1'
+or '/var/spool/hylafax/etcconfig.ttyr1' if no seending, to find the outgoing send phone number and caller id name. It then
+starts '/usr/local/sbin/t38modem' with this information
+
+/Library/LaunchDaemons/t38modem.plist
+This file instructs 'launchctl' to start '/usr/local/sbin/t38modemscript' (which starts t38modem) and will restart it in
+case it crashes.
+
+Installation
+
+The package 'Acordex T38-HylaFax' in 'to ship:Hylafax AP' will install the T38modem program and Hylafax 6.
+It will run the 'Applications:Hylafax Install:Hylafax Manager' program to ask for input on configuring the
+number of lines, phone number, station id (also used a caller id), etc.
+
+This installation can be re-run to do an upgrade. In progress fax sends or received will be clobbered. The sends
+will retry is this is not the last attempt.
+
+Interface to HylaFax
+
+The hylafax modems for sending are 'ttys1,ttys2..,,ttys9,ttysa,ttysb..ttysf' and 'ttyt1,ttyt2..,,ttyt9,ttyta,ttytb..ttytf'
+The hylafax modems for sending are 'ttyr1,ttyr2..,,ttyr9,ttyra,ttyrb..ttyrf' and 'ttyq1,ttyq2..,,ttyq9,ttyqa,ttyqb..ttyqf'
+Note 's' and 't' for send or transmit, and 'r' for receive ('q' is also receive).
+Typically with only one send and receive line this is 'ttys1' and 'ttyr1'. Up to 30 lines each way are possible. The current
+T38Modem program will handle up to 20 total (divided any way between send and receive).
+
+The 'Applications:Hylafax Install:Hylafax Manager' program can be used to configure existing modems/lines.
+
+The 'Fax Number' and 'Area code' for ttys1 is critical, this determines the actual phone line being used for billing and must match
+our billing settings. The 'station id' will appear in the 'caller id' of the recieving phone as well as be used as
+the station id by the receiving fax machine. It is also printed at the top of each page as usual. The DialString should
+always be "ATDTF%s" - the 'F' is force fax mode which tells T38Modem to issue the SIP Re-Invite to T38 protocol without
+waiting for the VOIP system to recognize the dialed phone as a fax. Rings before answer for receive modems must be at least
+2 because the caller id information is passed between the ring indications. T38 actually sends two rings at once when an incoming
+faxes is detected, so there is no delay in selecting two, and when dialed it will appear to answer on the first ring.
+
+The config files '/var/spool/hylafax/etc/config.ttysX (and ttytX)' reference the '/var/spool/hylafax/etc/dialrules.t38' which
+will append the area code in front of seven digit numbers. There is no need to add '9' in front of the numbers send via
+T38.
+
+Regular USB modems can be used inconjuction with T38 tty modems. The regular '/var/spool/hylafax/etc/dialrules' will be used
+and '9' may have to be added to the dial string in 'Applications:Hylafax Install:Hylafax Manager' for the USB modems.
+
+Adding/Removing Configuring Lines
+
+The command line script 'faxin' (/usr/local/sbin/faxin) can be used to do a multitude of tasks.
+
+Start/Stop/Restart T38Modem
+
+sudo faxin t38 on/off/restart
+
+Normally t38modem will be running a system start. Turning it 'off' will stop the program and all sending and
+receiving. Those dialing the inbound number(s) will hear silence, not ringing. Outbound faxes will fail, after
+3 retrys.
+
+If send or receive lines are added/dropped, then the T38Modem must be restarted with 'sudo faxin t38 restart'.
+The exception is a send line may be dropped without T38Modem restart.
+
+Add T38 Send Line:
+
+sudo faxin ttysX on [nostart]
+
+where - X is 1-9 or a-f
+
+- If the configuration file '/var/spool/hylafax/etc/config.ttysX' does not exist, it copies the default standard
+config file '/var/spool/hylafax/etc/std.config.t38.out' to 'config.ttysX'
+- If the configuration file did not exists. Hylafax Manager is run to allow entry of customer specific information,
+remember to select the correct modem name (ttysX) first
+- If the FIFO '/var/spool/hylafax/FIFO.ttysX' does not exist it is created.
+- If 'nostart' is not specified, then hylafax is notified, and will begin using this modem. Otherwise it will
+not be used until system restart, 'hylafax restart' command or 'faxin hfax restart' command is issued.
+
+Note: Fax sending on new line cannot start until 't38modem' is restarted (sudo faxin t38 restart)
+
+Add T38 Recv Line:
+
+sudo faxin ttyrX on [nostart]
+
+where - X is 1-9 or a-f
+
+works the same as adding a send line, except:
+The file '/Library/LaunchDaemons/fax.ttyrX.plist' is launch the 'faxgetty' program on system startup for receive.
+
+- If 'nostart' is not specified, then the faxgetty program is started.
+
+Note: Fax sending on new line cannot start until 't38modem' is restarted (sudo faxin t38 restart)
+
+Drop T38 Send Line:
+
+sudo faxin ttysX off
+
+Removes the FIFO '/var/spool/hylafax/FIFO.ttysX', the '/var/spool/hylafax/status/ttysX' file, but leaves
+the configuration file '/var/spool/hylafax/etc/config.ttysX' to allow for quick re-adding. Hylafax must be
+restarted to stop using the line. In progress fax sending for this line should continue.
+
+Drop T38 Receive Line:
+
+sudo faxin ttyrX off
+
+Removes the FIFO '/var/spool/hylafax/FIFO.ttysX', the '/var/spool/hylafax/status/ttysX' file, and the
+launchctl startup file /Library/LaunchDaemons/fax.ttyrX.plist but leaves the configuration file
+'/var/spool/hylafax/etc/config.ttysX' to allow for quick re-adding. Hylafax need not be
+restarted to stop using the line. T38 modem MUST be restarted, otherwise incoming calls will receive silence
+when that line is chosen. The 'faxgetty' program will be stopped. In progress fax receive on that
+line will be lost.
+
+Add USB Modem Send Line:
+
+sudo faxin cu.usbmodemXXXXXX on send [nostart]
+
+Same as adding a T38 line except the 'usbmodemXXXXXX' must come from the modem device name.
+'ls -l /dev/cu.usbmodem*' will give a list of these. Calling the lines and looking for ring indication
+can be used to determine which is which. T38 modem and Hylafax need not be restarted.
+
+Drop USB Modem Send Line:
+
+sudo faxin cu.usbmodemXXXXXX off send
+
+Same as droping a T38 line. Hylafax must be restarted, T38 modem does not.
+
+Add USB Modem Recv Line:
+
+sudo faxin cu.usbmodemXXXXXX on recv [nostart]
+
+Same as adding a T38 line except the 'usbmodemXXXXXX' must come from the modem device name.
+'ls -l /dev/cu.usbmodem*' will give a list of these. Calling the lines and looking for ring indication
+can be used to determine which is which. T38 modem and Hylafax need not be restarted.
+
+Drop USB Modem Send Line:
+
+sudo faxin cu.usbmodemXXXXXX off recv
+
+Same as droping a T38 line. T38 modem and Hylafax need not be restarted.
+
+
+Log Files:
+
+There are the standard Hylafax Log files:
+
+/var/spool/hylafax/status/ttyNN - current status of the modem
+/var/spool/hylafax/log/cNNNNNNNN - log file of modem conversion for each fax
+/var/spool/hylafax/etc/xferfaxlog - log with one line for each inbound and outbound call
+
+T38Modem log file:
+
+/var/log/t38log
+
+Contains lines like:
+
+2010/10/13 14:24:10.292 ptys1(e):2...0xb030b000 Outbound Call To 16096034959 Ended by Remote system failed temporarily
+2010/10/13 14:32:16.348 ptys1(e):2...0xb030b000 Outbound Call To 18022573030 Ended by Remote party busy

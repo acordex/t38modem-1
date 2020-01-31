@@ -1,0 +1,118 @@
+Debugging with GDB
+
+Add -g flags to Makefile for t38modem
+Add -g flag to ptlib/src/Makefile
+in ptlib
+make clean 
+make
+make install
+in t38modem
+make clean
+make
+
+in gdb
+sharelibrary  <- this command reads debug info for shared library.
+set args  (t38modem args)
+b xxxx to set breakpoints
+run
+
+n to step over
+s to step in
+c to continue to break point
+where to show stack trace
+
+#0  0x00029276 in T38ModemMediaStream::T38ModemMediaStream ()
+#1  0x00022d90 in ModemConnection::CreateMediaStream ()
+#2  0x00046e1e in OpalConnection::OpenMediaStream ()
+#3  0x0004e5d1 in OpalCall::OpenSourceMediaStreams ()
+#4  0x0009683f in SIPConnection::OnSendAnswerSDPSession ()
+#5  0x00095505 in SIPConnection::OnSendAnswerSDP ()
+#6  0x000910d2 in SIPConnection::OnReceivedReINVITE ()
+#7  0x000982c4 in SIPConnection::OnReceivedINVITE ()
+#8  0x0008e52d in SIPConnection::OnReceivedPDU ()
+#9  0x0008396a in SIPEndPoint::SIP_Work::Process ()
+#10 0x00080e4c in SIPEndPoint::SIP_Work_Thread::Main ()
+#11 0x001320e2 in PThread::PX_ThreadStart ()
+#12 0x002d5155 in _pthread_start ()
+#13 0x002d5012 in thread_start ()
+
+
+#0  0x00029d5a in T38ModemMediaStream::WritePacket ()
+#1  0x00060c89 in OpalMediaPatch::Sink::WriteFrame ()
+#2  0x00061310 in OpalMediaPatch::DispatchFrame ()
+#3  0x000615f7 in OpalMediaPatch::Main ()
+#4  0x001320e2 in PThread::PX_ThreadStart ()
+#5  0x002d5155 in _pthread_start ()
+#6  0x002d5012 in thread_start ()
+
+
+gdb function names:
+
+T38Engine::CompareObjectMemoryDirect(PObject const&) const
+T38Engine::GetClass(unsigned int) const
+T38Engine::HandleFakePacket()
+T38Engine::HandlePacket(T38_PreCorrigendum_IFPPacket const&)
+T38Engine::HandlePacketLost(unsigned int)
+T38Engine::InternalIsDescendant(char const*) const
+T38Engine::OnAttach()
+T38Engine::OnChangeModemClass()
+T38Engine::OnCloseIn()
+T38Engine::OnCloseOut()
+T38Engine::OnDetach()
+T38Engine::OnOpenIn()
+T38Engine::OnOpenOut()
+T38Engine::PreparePacket(T38_PreCorrigendum_IFPPacket&)
+T38Engine::Recv(void*, int)
+T38Engine::RecvDiag()
+T38Engine::RecvStart(int)
+T38Engine::RecvStop()
+T38Engine::RecvWait(EngineBase::DataType, int, int, bool&)
+T38Engine::ResetModemState()
+T38Engine::Send(void const*, int)
+T38Engine::SendOnIdle(EngineBase::DataType)
+T38Engine::SendStart(EngineBase::DataType, int)
+T38Engine::SendStop(bool, int)
+T38Engine::SendingNotCompleted() const
+T38Engine::StartInputDataStream(ModStream*)
+T38Engine::T38Engine(PString const&)
+T38Engine::_ResetModemState()
+T38Engine::isOutBufFull() const
+T38Engine::~T38Engine()
+T38Modem::CompareObjectMemoryDirect(PObject const&) const
+T38Modem::GetClass(unsigned int) const
+T38Modem::Initialise()
+T38Modem::InternalIsDescendant(char const*) const
+T38Modem::Main()
+T38Modem::T38Modem()
+T38Modem::~T38Modem()
+T38ModemMediaStream::Close()
+T38ModemMediaStream::CompareObjectMemoryDirect(PObject const&) const
+T38ModemMediaStream::GetClass(unsigned int) const
+T38ModemMediaStream::InternalIsDescendant(char const*) const
+T38ModemMediaStream::IsSynchronous() const
+T38ModemMediaStream::OnStartMediaPatch()
+T38ModemMediaStream::Open()
+T38ModemMediaStream::ReadPacket(RTP_DataFrame&)
+T38ModemMediaStream::T38ModemMediaStream(OpalConnection&, unsigned int, bool, T38Engine*)
+T38ModemMediaStream::WritePacket(RTP_DataFrame&)
+T38ModemMediaStream::~T38ModemMediaStream()
+T38PseudoRTP_Handler::ApplyStringOptions(PStringToString const&)
+T38PseudoRTP_Handler::DecrementSentPacketRedundancy(bool)
+T38PseudoRTP_Handler::OnReadTimeout(RTP_DataFrame&)
+T38PseudoRTP_Handler::OnSendControl(RTP_ControlFrame&, int&)
+T38PseudoRTP_Handler::OnSendData(RTP_DataFrame&)
+T38PseudoRTP_Handler::OnStart(RTP_Session&)
+T38PseudoRTP_Handler::OnWriteDataIdle()
+T38PseudoRTP_Handler::ReadDataPDU(RTP_DataFrame&)
+T38PseudoRTP_Handler::SetFrameFromIFP(RTP_DataFrame&, PASN_OctetString const&, unsigned int)
+T38PseudoRTP_Handler::SetWriteDataIdleTimer(PTimer&)
+T38PseudoRTP_Handler::T38PseudoRTP_Handler()
+T38PseudoRTP_Handler::WaitForPDU(PUDPSocket&, PUDPSocket&, PTimeInterval const&)
+T38PseudoRTP_Handler::WriteData(RTP_DataFrame&, bool)
+T38PseudoRTP_Handler::WriteDataPDU(RTP_DataFrame&)
+T38PseudoRTP_Handler::WriteUDPTL()
+T38PseudoRTP_Handler::~T38PseudoRTP_Handler()
+T38_ArrayOf_PASN_OctetString::Clone() const
+T38_ArrayOf_PASN_OctetString::CompareObjectMemoryDirect(PObject const&) const
+T38_ArrayOf_PASN_OctetString::CreateObject() const
+T38_ArrayOf_PASN_OctetString::GetClass(unsigned int) const
