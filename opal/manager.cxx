@@ -381,6 +381,7 @@ PBoolean MyManager::AddRouteEntry(const PString & spec)
         }
       }
     }
+#if OPAL_H323
     else if (RouteType == "h323") {
       if (RouteSubParts[0] == "OPAL-Disable-T38-Mode") {
         if ((RouteSubParts.GetSize() == 1) || (RouteSubParts[1]=="true")) {
@@ -388,7 +389,7 @@ PBoolean MyManager::AddRouteEntry(const PString & spec)
           MyH323EndPoint::defaultStringOptions.SetAt("Disable-T38-Mode", "true");
         }
       }
-      else if (RouteSubParts[0] == "OPAL-Enable-Audio") {
+     else if (RouteSubParts[0] == "OPAL-Enable-Audio") {
         // For Enable-Audio we have to Register the Fake Codecs
         // and make sure we always include G.711
         if (RouteSubParts.GetSize() == 2) {
@@ -398,6 +399,7 @@ PBoolean MyManager::AddRouteEntry(const PString & spec)
         }
       }
     }
+#endif
     else if (RouteType == "modem") {
       if (RouteSubParts[0] == "OPAL-Force-Fax-Mode") {
         if ((RouteSubParts.GetSize() == 1) || (RouteSubParts[1]=="true")) {
