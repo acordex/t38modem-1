@@ -6,6 +6,7 @@ PTLIB -
 The '--enable-opal' turns off all unneeded options. In addition,
 configure script modified to turn off :
 
+./configure --enable-minsize --enable-resolver --enable-dtmf --disable-video --enable-configfile
 default_openssl=yes
 default_expat=yes
 default_sdl=yes
@@ -38,7 +39,49 @@ sudo make opt install
 
 OPAL
 	configured by
- ./configure --disable-dependency-tracking --disable-shared
+    ./configure --disable-java --disable-ruby --disable-video --disable-h323 --disable-iax2 --disable-h224 --disable-h281 --disable-msrp --disable-h450 --disable-h460 --disable-h239 --disable-h501 --disable-t120 --disable-lid --disable-ivr --disable-rfc4175 --disable-rfc2435 --disable-mixer --disable-pcss --disable-samples
+
+  --enable-versioncheck   enable ptlib versioncheck
+  --enable-localspeexdsp  Force use local version of Speex DSP library for
+                          echo cancellation rather than system version
+  --enable-zrtp           enable ZRTP protocol support
+  --enable-srtp           enable SRTP protocol support
+  --enable-capi           enable CAPI
+  --disable-java           enable Java JNI support
+  --disable-ruby           enable Ruby support
+  --disable-video          whether to enable video codec support
+  --enable-sip            whether to enable SIP protocol support
+  --disable-h323           whether to enable H.323 protocol support
+  --disable-iax2           whether to enable IAX2 protocol support
+  --disable-h224           whether to enable H.224 protocol support
+  --disable-h281           whether to enable H.281 (Far End Camera Control)
+                          protocol support
+  --enable-t38            whether to enable T.38 capability support
+  --disable-msrp           whether to enable MSRP support
+  --enable-sipim         (won't build without) whether to enable SIPIM session support (instant messaging)
+  --enable-rfc4103       (won't build without) whether to enable RFC4103 support
+  --enable-fax            whether to enable T.38 FAX protocol support
+  --disable-h450           whether to enable H.450
+  --disable-h460           whether to enable H.460
+  --disable-h239           whether to enable H.239
+  --disable-h501           whether to enable H.501
+  --disable-t120           whether to enable T.120
+  --disable-lid            whether to enable LID support
+  --disable-ivr            whether to enable IVR support
+  --disable-rfc4175        whether to enable RFC4175 support
+  --disable-rfc2435        whether to enable RFC2435 support (experimental)
+  --enable-aec            whether to enable accoustic echo cancellation
+                          support
+  --enable-g711plc        whether to enable Packet Loss Concealment for G.711
+  --enable-rtcpxr         whether to enable RTCP Extended Reports support
+  --enable-statistics     whether to enable statistics gathering support
+  --disable-mixer          whether to enable media mixing support
+  --disable-pcss           whether to enable PC sound system support
+  --enable-plugins        whether to enable plugin support
+  --disable-samples        whether to enable samples build
+
+
+
  
  --disable-shared must remove build of shared library version, we are using linked in
  library to reduce deliverables. 'disable-dependency-tracking' does not appear in configure

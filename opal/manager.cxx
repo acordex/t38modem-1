@@ -256,11 +256,13 @@ PBoolean MyManager::Initialise(const PConfigArgs & args)
       "Imaging"
   );
 
-   /* Acordex added - hard wire the external IP addres without stun server */
+   /* Acordex added - hard wire the external IP address without stun server */
   if (args.HasOption("exip")) {
     	PIPSocket::Address externalAddress(args.GetOptionString("exip"));
+    	PTRACE(0, "External IP \"" << externalAddress << "\"");
 		SetTranslationAddress(externalAddress);
-  }
+  } else PTRACE(0, "No External IP setting");
+
   if (args.HasOption("stun"))
     SetSTUNServer(args.GetOptionString("stun"));
 
