@@ -310,7 +310,7 @@ PBoolean MyManager::Initialise(const PConfigArgs & args)
     }
   }
 
-  SetRtpIpPorts(10000,10999);  // for Verizon Certification
+//  SetRtpIpPorts(10000,10999);  // for Verizon Certification
 
   return TRUE;
 }
